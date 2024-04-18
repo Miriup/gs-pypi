@@ -60,6 +60,7 @@ Create new user overlay:
 
 ```
 gs-pypi -o $OVERLAY_DIRECTORY -r pypi sync
+gs-pypi -o $OVERLAY_DIRECTORY -r pypi generate-tree --digest
 ```
 
 List packages:

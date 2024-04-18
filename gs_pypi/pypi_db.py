@@ -419,6 +419,19 @@ class PypiDBGenerator(DBGenerator):
         return ret
 
     def maybe_add_package(self, pkg_db, package, data):
+        """
+        Check if the version of the package is already present in the package database and add it if it is not
+
+        This filters out packages already present in portage as well as packages
+        that for some reason have previously already been added.
+
+        Input:
+        * package - Package instance
+        * data - dict representing the data that has to be written to the ebuild
+
+        Output:
+        * call to pkg_db.add_package if the package is not already present
+        """
         nout = self.name_output(data['realname'], package.name)
         if pkg_db.in_category(package.category, package.name):
             versions = pkg_db.list_package_versions(package.category,
@@ -431,7 +444,14 @@ class PypiDBGenerator(DBGenerator):
 
     def process_data(self, pkg_db, data, common_config, config):
         """
-        Process parsed package data.
+        Process parsed package data from PyPI one package at a time
+
+        Input:
+        * data - raw PyPI database parsed into a JSON dict 
+
+        Output:
+        * pkg_data given to self.process_datum containing the pypi-json-data
+          for one single package (for one single software project)
         """
         category = "dev-python"
         pkg_db.add_category(category)
@@ -449,7 +469,7 @@ class PypiDBGenerator(DBGenerator):
     @containment
     def process_datum(self, pkg_db, common_config, config, package, pkg_data):
         """
-        Process one parsed package datum.
+        Go through all variants of one parsed package datum and select the variant we want to utilise in the ebuild
         """
         _logger.info(f'Processing {package}.')
 
@@ -577,6 +597,7 @@ class PypiDBGenerator(DBGenerator):
         if not select:
             _logger.warn(f'No valid releases for {package} -- dropping.')
 
+        # Create a package for the selected variants
         for variant in select.values():
             self.create_package(
                 pkg_db, common_config, config, package, variant['pkg_datum'],
@@ -585,6 +606,19 @@ class PypiDBGenerator(DBGenerator):
 
     def create_package(self, pkg_db, common_config, config, package, pkg_datum,
                        src_uri, use_wheel, aberrations):
+        """
+        Assemble all the data needed to create a package ebuild file
+
+        Input: 
+        * pkg_db & config
+        * package:
+        * pkg_datum: as it can be found pypi-json-data
+
+        Output passed to self.maybe_add_package:
+        * pkg_db
+        * Package instance
+        * ebuild_data: dict with all the fields needed to construct an ebuild
+        """
         _logger.info(f'Creating {pkg_datum["info"]["version"]}.')
         category = "dev-python"
         homepage = pkg_datum['info']['home_page'] or ""
