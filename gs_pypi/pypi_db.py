@@ -616,7 +616,7 @@ class PypiDBGenerator(DBGenerator):
 
         Output passed to self.maybe_add_package:
         * pkg_db
-        * Package instance
+        * Package instance - basically an object representing the contents of ${P}
         * ebuild_data: dict with all the fields needed to construct an ebuild
         """
         _logger.info(f'Creating {pkg_datum["info"]["version"]}.')
