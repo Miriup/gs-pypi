@@ -557,6 +557,7 @@ class PypiDBGenerator(DBGenerator):
                                     'key': key,
                                     'pkg_datum': datum,
                                     'src_uri': entry['url'],
+                                    'digests': entry['digests'],
                                 })
                     else:
                         if entry['packagetype'] == 'sdist':
@@ -564,6 +565,7 @@ class PypiDBGenerator(DBGenerator):
                                 'key': key,
                                 'pkg_datum': datum,
                                 'src_uri': entry['url'],
+                                'digests': entry['digests'],
                             })
                             break
 
@@ -602,10 +604,10 @@ class PypiDBGenerator(DBGenerator):
             self.create_package(
                 pkg_db, common_config, config, package, variant['pkg_datum'],
                 variant['src_uri'], variant['use_wheel'],
-                variant['aberrations'])
+                variant['aberrations'], variant['digests'])
 
     def create_package(self, pkg_db, common_config, config, package, pkg_datum,
-                       src_uri, use_wheel, aberrations):
+                       src_uri, use_wheel, aberrations, digests):
         """
         Assemble all the data needed to create a package ebuild file
 
@@ -779,7 +781,8 @@ class PypiDBGenerator(DBGenerator):
 
         ebuild_data["homepage"] = homepage
         ebuild_data["license"] = pkg_license
-        ebuild_data["src_uri"] = nice_src_uri
+        ebuild_data["src_uri"] = src_uri
+        ebuild_data["digests"] = digests
         ebuild_data["sourcefile"] = filename
         ebuild_data["repo_uri"] = nice_src_uri.removesuffix(
             ebuild_data["sourcefile"])
