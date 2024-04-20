@@ -444,7 +444,7 @@ class PypiDBGenerator(DBGenerator):
 
     def process_data(self, pkg_db, data, common_config, config):
         """
-        Process parsed package data from PyPI one package at a time
+        Process parsed package data from PyPI and call process_datum for each package
 
         Input:
         * data - raw PyPI database parsed into a JSON dict 
