@@ -331,6 +331,11 @@ class PypiDBGenerator(DBGenerator):
     """
 
     def generate_tree(self, pkg_db, common_config, config):
+        # The g-sorcery interface asks me to carry along pkg_db and config's C-style. However, we're in python and hence we refac
+        self.pkg_db = pkg_db
+        self.common_config = common_config
+        self.config = config
+        #
         self.exclude = set(self.combine_config_lists(
             [common_config, config], 'exclude'))
         self.wanted = set(self.combine_config_lists(
@@ -339,17 +344,17 @@ class PypiDBGenerator(DBGenerator):
             [common_config, config], 'substitute')
         self.nonice = set(self.combine_config_lists(
             [common_config, config], 'nonice'))
-        self.mainpkgs = self.lookupmaintree(common_config, config)
+        self.mainpkgs = self.lookupmaintree()
         # Now proceed with normal flow
         super().generate_tree(pkg_db, common_config, config)
 
-    def lookupmaintree(self, common_config, config):
+    def lookupmaintree(self):
         ret = set()
         fname = "dev-python.html"
         pattern = (
             r'<a[^>]*/gentoo.git/tree/dev-python[^>]*>([-a-zA-Z0-9\._]+)</a')
         with tempfile.TemporaryDirectory() as download_dir:
-            if wget(config['gentoo_main_uri'], download_dir, fname):
+            if wget(self.config['gentoo_main_uri'], download_dir, fname):
                 raise DownloadingError("Retrieving main tree directory failed")
             with open(pathlib.Path(download_dir) / fname) as htmlfile:
                 for line in htmlfile.readlines():
@@ -418,7 +423,7 @@ class PypiDBGenerator(DBGenerator):
             ret += f" (as {filtered_package})"
         return ret
 
-    def maybe_add_package(self, pkg_db, package, data):
+    def maybe_add_package(self, data):
         """
         Check if the version of the package is already present in the package database and add it if it is not
 
@@ -433,16 +438,16 @@ class PypiDBGenerator(DBGenerator):
         * call to pkg_db.add_package if the package is not already present
         """
         nout = self.name_output(data['realname'], package.name)
-        if pkg_db.in_category(package.category, package.name):
-            versions = pkg_db.list_package_versions(package.category,
+        if self.pkg_db.in_category(package.category, package.name):
+            versions = self.pkg_db.list_package_versions(package.category,
                                                     package.name)
             if package.version in versions:
                 _logger.warn(f"Rejected package {nout} for collision.")
                 return False
-        pkg_db.add_package(package, data)
+        self.pkg_db.add_package(package, data)
         return True
 
-    def process_data(self, pkg_db, data, common_config, config):
+    def process_data(self, data):
         """
         Process parsed package data from PyPI and call process_datum for each package
 
@@ -454,20 +459,19 @@ class PypiDBGenerator(DBGenerator):
           for one single package (for one single software project)
         """
         category = "dev-python"
-        pkg_db.add_category(category)
+        self.pkg_db.add_category(category)
 
         common_data = {}
         common_data["eclasses"] = ['g-sorcery', 'gs-pypi']
         common_data["maintainer"] = [{'email': 'gentoo@houseofsuns.org',
                                       'name': 'Markus Walter'}]
-        pkg_db.set_common_data(category, common_data)
+        self.pkg_db.set_common_data(category, common_data)
 
         for package, pkg_data in data['main.zip'].items():
-            self.process_datum(pkg_db, common_config, config, package,
-                               pkg_data)
+            self.process_datum(package, pkg_data)
 
     @containment
-    def process_datum(self, pkg_db, common_config, config, package, pkg_data):
+    def process_datum(self, package, pkg_data):
         """
         Go through all variants of one parsed package datum and select the variant we want to utilise in the ebuild
         """
@@ -602,11 +606,11 @@ class PypiDBGenerator(DBGenerator):
         # Create a package for the selected variants
         for variant in select.values():
             self.create_package(
-                pkg_db, common_config, config, package, variant['pkg_datum'],
+                package, variant['pkg_datum'],
                 variant['src_uri'], variant['use_wheel'],
                 variant['aberrations'], variant['digests'])
 
-    def create_package(self, pkg_db, common_config, config, package, pkg_datum,
+    def create_package(self, package, pkg_datum,
                        src_uri, use_wheel, aberrations, digests):
         """
         Assemble all the data needed to create a package ebuild file
@@ -644,7 +648,7 @@ class PypiDBGenerator(DBGenerator):
             mask_spec=[
                 ('a', 'z'), ('A', 'Z'), ('0', '9'),
                 ''' #%'*+,-./:;=<>&@[]_{}~'''])
-        pkg_license = self.convert([common_config, config], "licenses",
+        pkg_license = self.convert([self.common_config, self.config], "licenses",
                                    pkg_license)
         pkg_license = self.escape_bash_string(pkg_license)
 
@@ -795,7 +799,6 @@ class PypiDBGenerator(DBGenerator):
             "wheel" if use_wheel else "standalone")
 
         self.maybe_add_package(
-                pkg_db,
                 Package(category, filtered_package, filtered_version),
                 ebuild_data)
 
