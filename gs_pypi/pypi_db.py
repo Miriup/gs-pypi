@@ -523,6 +523,58 @@ class PypiDBGenerator(DBGenerator):
                             data.update(self.parse_datum(second))
         return data
 
+class SourceURI(object):
+    """
+    Capture SRC_URI together with checksums
+
+    >>> src_uri=gs_pypi.pypi_db.SourceURI(uri="https://files.pythonhosted.org/packages/16/fc/764c31a0ced73481d033d7a267d185f865abeeb073c410b2fdff9680504f/transform3d-0.0.0-py3-none-any.whl")
+    >>> print(src_uri)
+    https://files.pythonhosted.org/packages/16/fc/764c31a0ced73481d033d7a267d185f865abeeb073c410b2fdff9680504f/transform3d-0.0.0-py3-none-any.whl
+    >>> print(src_uri.split("/"))
+    ['https:', '', 'files.pythonhosted.org', 'packages', '16', 'fc', '764c31a0ced73481d033d7a267d185f865abeeb073c410b2fdff9680504f', 'transform3d-0.0.0-py3-none-any.whl']
+    >>> src_uri.setHash("md5","4d64f08f869dc9c8b3f8affa03b37e5f")
+    >>> src_uri.hashes
+    {'MD5': '4d64f08f869dc9c8b3f8affa03b37e5f'}
+    >>> print(src_uri)
+    https://files.pythonhosted.org/packages/16/fc/764c31a0ced73481d033d7a267d185f865abeeb073c410b2fdff9680504f/transform3d-0.0.0-py3-none-any.whl
+    
+    """
+
+    # How hash functions in PyPI database match to hash functions in portage Manifest
+    hash_translation_table = {
+        "md5": "MD5",
+        "sha256": "SHA256"
+        }
+
+    def __init__(self,uri=None,hashes=None):
+        self.uri = uri
+        self.hashes = {}
+        if hashes is not None:
+            self.hashes_from_pypi(hashes)
+
+    def hashes_from_pypi(self,hashes):
+        for h,v in hashes.items():
+            self.setHash(h,v)
+
+    def setHash(self,h,v):
+        """
+        Set single hash
+        """
+        self.hashes[self.hash_translation_table[h]] = v
+
+    def __getattr__(self,name):
+        """
+        Route all accesses of data within the class to the string object. 
+        This preserves compatibility with old g-sorcery.
+        """
+        return getattr(self.uri,name)
+
+    def __str__(self):
+        """
+        Return this object as a string. This preserves compatibility with old g-sorcery.
+        """
+        return self.uri
+
 class PyPIpeline(object):
     """
     Central pipeline the convert PyPI structure into portage structure
@@ -717,16 +769,14 @@ class PyPIpeline(object):
                                 variant.update({
                                     'key': key,
                                     'pkg_datum': datum,
-                                    'src_uri': entry['url'],
-                                    'digests': entry['digests'],
+                                    'src_uri': SourceURI(uri=entry['url'],hashes=entry["digests"]),
                                 })
                     else:
                         if entry['packagetype'] == 'sdist':
                             variant.update({
                                 'key': key,
                                 'pkg_datum': datum,
-                                'src_uri': entry['url'],
-                                'digests': entry['digests'],
+                                'src_uri': SourceURI(uri=entry['url'],hashes=entry["digests"]),
                             })
                             break
 
