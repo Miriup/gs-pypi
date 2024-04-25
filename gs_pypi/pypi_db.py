@@ -324,6 +324,113 @@ def sanitize_useflag(useflag):
         ret = 'x' + ret
     return ret
 
+class PyPIjsonDataIteratorVersion(object):
+    """
+    Iterator effectively parsing through one PyPI JSON file
+
+    >>> import gs_pypi.pypi_db,pprint
+    >>> i=gs_pypi.pypi_db.PyPIjsonDataIteratorVersion("transform3d",open("tests/transform3d.json"))
+     * Processing transform3d.
+     * Creating 0.0.0.
+     * Processing transform3d.
+     * Creating 0.0.1.
+     * Processing transform3d.
+     * Creating 0.0.2.
+     * Processing transform3d.
+     * Creating 0.0.3.
+     * Processing transform3d.
+     * Creating 0.0.4.
+    """
+
+    def __init__(self,name,f):
+        self.iter = {}
+        for ver,data in json.load(f).items():
+            self.iter[ver] = PyPIjsonDataIteratorEbuildData(name,ver,data)
+
+    def __iter__(self):
+        return iter(self.iter.items())
+
+class PyPIjsonDataIteratorEbuildData(object):
+    """
+    PackageDB iterator that creates ebuild data dict's on the fly
+
+    This class needs to provide the exact interfaces PackageDB needs. The
+    doctest below tests this.
+
+    >>> import gs_pypi.pypi_db,pprint
+    >>> i=gs_pypi.pypi_db.PyPIjsonDataIteratorVersion("transform3d",open("tests/transform3d.json"))
+	 * Processing transform3d.
+	 * Creating 0.0.0.
+	 * Processing transform3d.
+	 * Creating 0.0.1.
+	 * Processing transform3d.
+	 * Creating 0.0.2.
+	 * Processing transform3d.
+	 * Creating 0.0.3.
+	 * Processing transform3d.
+	 * Creating 0.0.4.
+    >>> for ver,ebuild_data in iter(i):
+    ...     print (ver)
+    ...     ebuild_data=dict(ebuild_data)
+    ...     pprint.pprint(ebuild_data)
+    ...     break
+    ... 
+    0.0.0
+    {'dependencies': <g_sorcery.g_collections.serializable_elist object at 0x7f02da3edbd0>,
+     'description': 'handy classes for 3d transformations',
+     'distutils_use_pep517': 'standalone',
+     'homepage': 'https://github.com/RasmusHaugaard/transform3d',
+     'iuse': '',
+     'license': '',
+     'literalname': '${PN}',
+     'mtime': '2020-07-31T15:33:18.437661+00:00',
+     'python_compat': '( python{3_10,3_11,3_12} )',
+     'realname': '${PN}',
+     'realversion': '${PV}',
+     'repo_uri': 'https://files.pythonhosted.org/packages/source/${REALNAME::1}/${REALNAME}/',
+     'sourcefile': '${REALNAME}-${REALVERSION}.tar.gz',
+     'src_uri': <gs_pypi.pypi_db.SourceURI object at 0x7f02da3ffe10>}
+    """
+
+    def __init__(self,package,version,data):
+        self.json_data = data
+        self.ebuild_data = None
+        self.pipeline = PyPIpeline()
+        self.pipeline.set_pkg_db(self)
+        self.pipeline.process_version(package, {version: data})
+    def in_category(self, category, name):
+        return False
+
+    def add_package(self,package,ebuild_data):
+        """
+        Compatible with pkg_db interface. Receives the database call to add a package
+        """
+        self.package = package
+        self.ebuild_data = ebuild_data
+
+    def set_common_data(self, category, common_data):
+        pass
+
+    def add_category(self,category):
+        """
+        We already know it's gonna be dev-python for obvious reasons.
+        """
+        pass
+
+    def __iter__(self):
+        # We return one ebuild_data JSON. 
+        # PyPIpeline generates it during self.__init__.
+        return iter(self.ebuild_data.items())
+
+    def __getitem__(self,key):
+        """
+        Support accessing data in ebuild_data directly
+        from https://stackoverflow.com/questions/39286116/python-class-behaves-like-dictionary-or-list-data-like
+        """
+        return self.ebuild_data[key]
+
+    def __setitem__(self,key,value):
+        self.ebuild_data[key]=value
 
 class PypiDBGenerator(DBGenerator):
     """
@@ -416,6 +523,24 @@ class PypiDBGenerator(DBGenerator):
                             data.update(self.parse_datum(second))
         return data
 
+class PyPIpeline(object):
+    """
+    Central pipeline the convert PyPI structure into portage structure
+
+    This class implements the core of what's necessary to take the contents of
+    a PyPI JSON file as input one version at a time and create an ebuild_data
+    dict as it can be found in the g-sorcery package database as output.
+
+    We need a pull based method (fetching data one record at a time) due to the
+    size of the data we want to convert if it should be possible to create a
+    repository containing ALL PyPI packages. This class has also the leftovers
+    from the push method which generates ebuild_data for inclusion into the
+    PackageDB upon sync. Doing this gets us OOM even on a 64GB RAM machine.
+
+    Base functionality of PyPIpeline is implicitely tested with class
+    PyPIjsonDataIteratorEbuildData doctest which uses it.
+    """
+    
     @staticmethod
     def name_output(package, filtered_package):
         ret = package
@@ -423,7 +548,7 @@ class PypiDBGenerator(DBGenerator):
             ret += f" (as {filtered_package})"
         return ret
 
-    def maybe_add_package(self, data):
+    def _is_package_addable(self, package, data):
         """
         Check if the version of the package is already present in the package database and add it if it is not
 
@@ -437,15 +562,28 @@ class PypiDBGenerator(DBGenerator):
         Output:
         * call to pkg_db.add_package if the package is not already present
         """
-        nout = self.name_output(data['realname'], package.name)
+        nout = PyPIpeline.name_output(data['realname'], package.name)
         if self.pkg_db.in_category(package.category, package.name):
             versions = self.pkg_db.list_package_versions(package.category,
                                                     package.name)
             if package.version in versions:
                 _logger.warn(f"Rejected package {nout} for collision.")
                 return False
-        self.pkg_db.add_package(package, data)
         return True
+
+    def process_init(self):
+        """
+        Initialise common data
+        """
+        category = "dev-python"
+        self.pkg_db.add_category(category)
+
+        common_data = {}
+        common_data["eclasses"] = ['g-sorcery', 'gs-pypi']
+        common_data["maintainer"] = [{'email': 'gentoo@houseofsuns.org',
+                                      'name': 'Markus Walter'}]
+        self.pkg_db.set_common_data(category, common_data)
+
 
     def process_data(self, data):
         """
@@ -458,22 +596,41 @@ class PypiDBGenerator(DBGenerator):
         * pkg_data given to self.process_datum containing the pypi-json-data
           for one single package (for one single software project)
         """
-        category = "dev-python"
-        self.pkg_db.add_category(category)
-
-        common_data = {}
-        common_data["eclasses"] = ['g-sorcery', 'gs-pypi']
-        common_data["maintainer"] = [{'email': 'gentoo@houseofsuns.org',
-                                      'name': 'Markus Walter'}]
-        self.pkg_db.set_common_data(category, common_data)
+        self.process_init()
 
         for package, pkg_data in data['main.zip'].items():
             self.process_datum(package, pkg_data)
 
-    @containment
-    def process_datum(self, package, pkg_data):
+    def process_versions(self, package, pkg_data):
+        """
+        Processes one file of pypi-json-data
+
+        Input:
+          package: What package this is
+          pkg_data: pypi-json-data JSON dict for only the package above
+        Output:
+          call to self.process_version with the dict for that version
+
+        """
+
+        versions=[]
+
+        for version in pkg_data.keys():
+            _logger.info( "Looking at verion %s of package %s" % (version,package) )
+            v=self.process_version(package, {version: pkg_data[version]})
+            if v is not None:
+                versions.append(v)
+        return versions
+
+    #@containment
+    def process_version(self, package, pkg_data):
         """
         Go through all variants of one parsed package datum and select the variant we want to utilise in the ebuild
+        If you replace the call to process_versions to a call to
+        process_version, it will pick one version amongst all available
+        versions. For this to work process_version picks each version, but
+        passes them in pkg_data as an array containing a single version only.
+
         """
         _logger.info(f'Processing {package}.')
 
@@ -604,14 +761,17 @@ class PypiDBGenerator(DBGenerator):
             _logger.warn(f'No valid releases for {package} -- dropping.')
 
         # Create a package for the selected variants
+        variants=[]
         for variant in select.values():
+            variants.append(variant)
             self.create_package(
                 package, variant['pkg_datum'],
                 variant['src_uri'], variant['use_wheel'],
-                variant['aberrations'], variant['digests'])
+                variant['aberrations'])
+        return variants
 
-    def create_package(self, package, pkg_datum,
-                       src_uri, use_wheel, aberrations, digests):
+    def get_ebuild_data(self, package, pkg_datum,
+                       src_uri, use_wheel, aberrations):
         """
         Assemble all the data needed to create a package ebuild file
 
@@ -634,7 +794,7 @@ class PypiDBGenerator(DBGenerator):
                 homepage = purls.get(key, "")
                 if homepage:
                     break
-        homepage = self.escape_bash_string(self.strip_characters(homepage))
+        homepage = DBGenerator.escape_bash_string(DBGenerator.strip_characters(homepage))
 
         fromiso = datetime.datetime.fromisoformat
         mtime = min(fromiso(entry['upload_time_iso_8601'])
@@ -643,14 +803,15 @@ class PypiDBGenerator(DBGenerator):
         pkg_license = pkg_datum['info']['license'] or ''
         # This has to avoid any characters that have a special meaning for
         # dependency specification, these are: !?|^()
-        pkg_license = self.filter_characters(
+        pkg_license = DBGenerator.filter_characters(
             (pkg_license.splitlines() or [''])[0],
             mask_spec=[
                 ('a', 'z'), ('A', 'Z'), ('0', '9'),
                 ''' #%'*+,-./:;=<>&@[]_{}~'''])
-        pkg_license = self.convert([self.common_config, self.config], "licenses",
-                                   pkg_license)
-        pkg_license = self.escape_bash_string(pkg_license)
+        # FIXME config is relevant here
+        #pkg_license = DBGenerator.convert([], "licenses",
+        #                           pkg_license)
+        pkg_license = DBGenerator.escape_bash_string(pkg_license)
 
         requires_python = extract_requires_python(
             pkg_datum['info']['requires_python'])
@@ -671,11 +832,15 @@ class PypiDBGenerator(DBGenerator):
         else:
             python_compat = '( python{' + (','.join(py_versions)) + '} )'
 
+        # FIXME Fix this
+        self.substitutions = {}
         requires_dist = extract_requires_dist(
             pkg_datum['info']['requires_dist'], self.substitutions)
 
         dependencies = []
         useflags = set()
+        # FIXME
+        self.mainpkgs = {}
         for dep in requires_dist:
             for extra in (dep['extras'] or [""]):
                 if (dep['name'] in self.mainpkgs) and dep["versionbound"]:
@@ -739,7 +904,9 @@ class PypiDBGenerator(DBGenerator):
             npattern = r'\$\{(LITERALNAME|REALNAME)[-_/]*\}-\$\{REALVERSION\}'
             if ((mo := re.match(npattern, filename))
                     and package[0] in string.ascii_letters + string.digits
-                    and pypi_normalize(package) not in self.nonice):
+                    #FIXME
+                    #and pypi_normalize(package) not in self.nonice
+                    ):
                 name = mo.group(1)
                 # Use redirect URL to avoid churn through the embedded hashes
                 # in the actual URL
@@ -768,7 +935,7 @@ class PypiDBGenerator(DBGenerator):
             aberrations.append('wheel')
         if aberrations:
             description += " [" + ", ".join(aberrations) + "]"
-        filtered_description = self.escape_bash_string(self.strip_characters(
+        filtered_description = DBGenerator.escape_bash_string(DBGenerator.strip_characters(
             description))
 
         ebuild_data = {}
@@ -786,7 +953,6 @@ class PypiDBGenerator(DBGenerator):
         ebuild_data["homepage"] = homepage
         ebuild_data["license"] = pkg_license
         ebuild_data["src_uri"] = src_uri
-        ebuild_data["digests"] = digests
         ebuild_data["sourcefile"] = filename
         ebuild_data["repo_uri"] = nice_src_uri.removesuffix(
             ebuild_data["sourcefile"])
@@ -797,10 +963,17 @@ class PypiDBGenerator(DBGenerator):
         ebuild_data["dependencies"] = deplist
         ebuild_data["distutils_use_pep517"] = (
             "wheel" if use_wheel else "standalone")
+        return ebuild_data
 
-        self.maybe_add_package(
-                Package(category, filtered_package, filtered_version),
-                ebuild_data)
+    def create_package(self, package, pkg_datum,
+                       src_uri, use_wheel, aberrations):
+        ebuild_data = self.get_ebuild_data(package, pkg_datum,
+                       src_uri, use_wheel, aberrations)
+        package = Package("dev-python", ebuild_data['realname'], ebuild_data['realversion'])
+        if self._is_package_addable(
+                package,
+                ebuild_data):
+            self.pkg_db.add_package(package, ebuild_data)
 
     def convert_internal_dependency(self, configs, dependency):
         """
