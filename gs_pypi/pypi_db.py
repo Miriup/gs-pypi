@@ -538,7 +538,7 @@ class PypiDBGenerator(DBGenerator):
         super().generate_tree(pkg_db, common_config, config)
 
     def process_data(self, pkg_db, data, common_config, config):
-        reader = PyPIjsonDataFromZip(self.persistent_datadir / "main.zip")
+        reader = PyPIjsonDataFromZip(self.pkg_db.persistent_datadir + "/main.zip")
         pipeline = PyPIjsonDataToPipeline(reader,pkg_db)
 
     def _lookupmaintree(self):
