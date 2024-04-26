@@ -778,6 +778,9 @@ class PyPIpeline(object):
             ret += f" (as {filtered_package})"
         return ret
 
+    def set_pkg_db(self,pkg_db):
+        self.pkg_db = pkg_db
+
     def _is_package_addable(self, package, data):
         """
         Check if the version of the package is already present in the package database and add it if it is not
