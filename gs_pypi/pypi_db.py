@@ -27,7 +27,7 @@ from g_sorcery.exceptions import DownloadingError
 from g_sorcery.fileutils import wget
 from g_sorcery.g_collections import (
     Dependency, Package, serializable_elist, Version)
-from g_sorcery.package_db import DBGenerator
+from g_sorcery.package_db import DBGenerator,PackageDB
 from g_sorcery.logger import Logger
 
 _logger = Logger()
@@ -514,8 +514,13 @@ class PypiDBGenerator(DBGenerator):
     Implementation of database generator for PYPI backend.
     """
 
+    def __init__(self, *args, **kwargs):
+        self.package_db_class = PyPIjsonDataIterator
+        super().__init__(*args,**kwargs)
+
     def generate_tree(self, pkg_db, common_config, config):
-        # The g-sorcery interface asks me to carry along pkg_db and config's C-style. However, we're in python and hence we refac
+        # The g-sorcery interface asks me to carry along pkg_db and config's
+        # C-style. However, we're in python.
         self.pkg_db = pkg_db
         self.common_config = common_config
         self.config = config
