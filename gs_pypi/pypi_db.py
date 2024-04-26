@@ -21,6 +21,7 @@ import re
 import string
 import subprocess
 import tempfile
+import shutil
 
 from g_sorcery.exceptions import DownloadingError
 from g_sorcery.fileutils import wget
@@ -324,6 +325,82 @@ def sanitize_useflag(useflag):
         ret = 'x' + ret
     return ret
 
+class PyPIjsonDataPackageDB(PackageDB):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args,**kwargs)
+
+    def __iter__(self):
+        return PyPIjsonDataIterator(PyPIjsonDataFromZip(self.persistent_datadir / "main.zip"))
+
+class PyPIjsonDataIterator(object):
+    """
+    Iterator producing a package_db.database.items() structure (see Iterator class in g-sorcery package_db.py)
+
+    """
+
+    def __init__(self,db,reader):
+        self.reader = reader
+
+    def __iter__(self):
+        return ("dev-python",PyPIjsonDataIteratorPackage(self.reader))
+
+class PyPIjsonDataIteratorPackage(object):
+
+    # FIXME How does the repository object come here?
+    def __init__(self,db):
+        self.reader = db
+        self.repository = None
+
+    def __next__(self):
+        nxt = None
+        # When we don't have a repository, we don't have main.zip open
+        if self.repository is None:
+            self.repository = self.reader.open_repository()
+            self.first_letter_iter = None
+            self.second_letter_iter = None
+        # When first_letter_iter is None, we aren't iterating yet
+        if first_letter_iter is None:
+            # FIXME Does this work?
+            self.first_letter_iter = self.reader.get_root_dir(self.repository).iterdir()
+            self.second_letter_iter = None
+        # first_letter_iter is now not None. If we don't have
+        # second_letter_iter we may have to dive into secondary directories
+        if second_letter_iter is None:
+            try:
+                nxt = next(first_letter_iter)
+                if nxt.is_dir():
+                    self.second_letter_iter = self.firstletterdir.iterdir()
+                    nxt = None
+            except StopIteration:
+                # If we're here, then there is no more files in the root
+                # (first-level) directory
+                self.first_letter_iter = None
+                raise
+        # If we're here, nxt is not None, second_letter_iter is None and
+        # first_letter_iter is not None, then we're dealing with some JSON
+        # files in the first-level directory that the original code also tried
+        # to capture.
+        if nxt is None:
+            try:
+                nxt = next(self.second_letter_iter)
+            except StopIteration:
+                # If we're here, then we reached the end of the current second
+                # level directory and have to continue reading the next
+                # firstlevel directory.
+                self.second_letter_iter = None
+                pass
+        if nxt is not None and nxt.is_file() and nxt.suffix == '.json':
+            with nxt.open() as f:
+                # Determine package name
+                resolved = self.repository.resolve_pn(datapath)
+                # Return {package_name: versions[]}
+                return {resolved: PyPIjsonDataIteratorVersion(resolved,f)}
+        # Recursion either when the second-level directory reached the end or
+        # nxt isn't a JSON file we're looking for. This shouldn't loop forever,
+        # because the StopIteration of the first-level iterable is raised.
+        return __next__(self)
+
 class PyPIjsonDataIteratorVersion(object):
     """
     Iterator effectively parsing through one PyPI JSON file
@@ -451,11 +528,15 @@ class PypiDBGenerator(DBGenerator):
             [common_config, config], 'substitute')
         self.nonice = set(self.combine_config_lists(
             [common_config, config], 'nonice'))
-        self.mainpkgs = self.lookupmaintree()
+        self.mainpkgs = self._lookupmaintree()
         # Now proceed with normal flow
         super().generate_tree(pkg_db, common_config, config)
 
-    def lookupmaintree(self):
+    def process_data(self, pkg_db, data, common_config, config):
+        reader = PyPIjsonDataFromZip(self.persistent_datadir / "main.zip")
+        pipeline = PyPIjsonDataToPipeline(reader,pkg_db)
+
+    def _lookupmaintree(self):
         ret = set()
         fname = "dev-python.html"
         pattern = (
@@ -476,40 +557,78 @@ class PypiDBGenerator(DBGenerator):
         Get URI of packages index.
         """
         _logger.info('Retrieving package index.')
-        return [{"uri": config["data_uri"], "open_file": True}]
+        return [{"uri": config["data_uri"], "open_file": False, "parser":self.handle_download}]
 
-    def parse_datum(self, datapath):
+    def handle_download(self,download):
+        """
+        Handle downloaded main.zip from github pypi-json-data
+        """
+        shutil.copyfile(download,self.persistent_datadir / "main.zip")
+
+class PyPIjsonDataRepository(object):
+
+    def resolve_pn(self,datapath):
         package = datapath.stem
         if package in self.exclude:
-            return {}
+            return None
         if (not os.environ.get('GSPYPI_INCLUDE_UNCOMMON')
                 and package not in self.wanted):
             # we only include a selected set of packages as otherwise the
             # overlay becomes unwieldy
-            return {}
+            return None
         if package != pypi_normalize(package):
             _logger.warn(f'Unnormalized input package {package}.')
         resolved = resolve_package_name(package, self.substitutions)
+        return resolved
+
+    def _adjust_datapath(self,datapath,package,resolved):
         if resolved != package:
             alternative = datapath.parent / f'{resolved}.json'
             if alternative.exists():
-                _logger.info(f'Switching data source {package} to {resolved}.')
+                _PyPIjsonDataToPipelinelogger.info(f'Switching data source {package} to {resolved}.')
                 datapath = alternative
-        with open(datapath, 'r') as datafile:
-            data = json.load(datafile)
-            return {resolved: data}
+        return datapath
 
-    def parse_data(self, data_f):
+    def parse_datum(self, datapath, datafile):
+        resolved = self.resolve_pn(datapath)
+        if resolved is None:
+            return {} 
+        # FIXME I don't get why we're changing the datapath when it's not used
+        # afterwards
+        datapath = self._adjust_datapath(datapath,datapath.stem,resolved)
+        data = json.load(datafile)
+        return {resolved: data}
+
+    def set_processor(self,proc):
+        self.processor = proc
+
+    def open_repository(self):
+        """
+        Opens the repository
+        """
+        raise Exception("Not implemeneted")
+
+    def get_root_dir(self,z):
+        """
+        Returns a path object representing the root of the repository
+        """
+        raise Exception("Not implemeneted")
+
+    def close_repository(self):
+        """
+        Close repository and return any value
+        """
+        pass
+
+    def process_file(self,entry,f):
+        self.processor.process_file(entry,f)
+
+    def parse_data(self):
         """
         Parse package data.
         """
-        data = {}
-        zipfile = pathlib.Path(data_f.name)
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            tmpdir = pathlib.Path(tmpdirname)
-            subprocess.run(['unzip', str(zipfile), '-d', str(tmpdir)],
-                           stdout=subprocess.DEVNULL, check=True)
-            datadir = tmpdir / 'pypi-json-data-main' / 'release_data'
+        with self.open_repository() as z:
+            firstletterdirs = self.get_root_dir(z)
             for firstletterdir in datadir.iterdir():
                 # There exist some metadata files which do not interest us
                 if firstletterdir.is_dir():
@@ -517,11 +636,36 @@ class PypiDBGenerator(DBGenerator):
                         if second.is_dir():
                             for entry in second.iterdir():
                                 if entry.is_file() and entry.suffix == '.json':
-                                    data.update(self.parse_datum(entry))
+                                    with entry.open() as f:
+                                        self.process_file(entry,f)
                         elif second.is_file() and second.suffix == '.json':
                             # Some entries are on the first level
-                            data.update(self.parse_datum(second))
-        return data
+                            with second.open() as f:
+                                self.process_file(second,f)
+        return self.close_repository()
+
+class PyPIjsonDataFromZip(PyPIjsonDataRepository):
+    """
+    Read ZIP file with PyPI package data in JSON format
+
+    """
+
+    def __init__(self,mainzip):
+        self.mainzip = mainzip
+
+    def open_repository(self):
+        """
+        Reset package data and open ZIP file
+        """
+        self.zip = zipfile.ZipFile(mainzip)
+        return self.zip
+
+    def get_root_dir(self,z):
+        return zipfile.Path(z).at("pypi-json-data-main/release_data")
+
+    def close_repository(self):
+        self.zip.close()
+
 
 class SourceURI(object):
     """
@@ -574,6 +718,35 @@ class SourceURI(object):
         Return this object as a string. This preserves compatibility with old g-sorcery.
         """
         return self.uri
+
+class PyPIjsonDataToPipeline(object):
+    """
+    Processor for PyPIjsonDataRepository type classes who uses PyPIpeline for the processing
+
+    Th
+    """
+
+    def __init__(self,sub,db = None):
+        """
+        Constructor
+
+        sub:PyPIjsonDataRepository
+        db:PackageDB
+        """
+        self.sub = sub
+        self.sub.set_processor(self)
+        self.pipeline = PyPIpeline()
+        if db is not None:
+            self.pipeline.set_pkg_db(db)
+        self.pipeline.process_init()
+
+    def set_pkg_db(self,db):
+        self.pipeline.set_pkg_db(db)
+
+    def process_file(self,entry,f):
+        d = self.sub.parse_datum(entry,f)
+        for version_json in self.pipeline.process_versions(d):
+            self.pipeline.process_version(version_json)
 
 class PyPIpeline(object):
     """
