@@ -543,6 +543,14 @@ class PypiDBGenerator(DBGenerator):
         pipeline = PyPIjsonDataToPipeline(reader,pkg_db)
 
     def _lookupmaintree(self):
+        """
+        Look up main tree by accessing Gentoo git repository via web
+
+        FIXME: We can safely assume that g-sorcery mostly will be run on Gentoo
+        machines, so we should instead take a look into the local Gentoo
+        repository in /var/db/repos/gentoo
+
+        """
         ret = set()
         fname = "dev-python.html"
         pattern = (
@@ -569,10 +577,16 @@ class PypiDBGenerator(DBGenerator):
         """
         Handle downloaded main.zip from github pypi-json-data
         """
+        _logger.info('Copying package index to %s' % self.persistent_datadir / "main.zip")
         shutil.copyfile(download,self.persistent_datadir / "main.zip")
 
 class PyPIjsonDataRepository(object):
 
+    """
+    The interface needed by the underlying
+    filesystem access of this call is
+    importlib.resources.abc.Traversable
+    """
     def resolve_pn(self,datapath):
         package = datapath.stem
         if package in self.exclude:
