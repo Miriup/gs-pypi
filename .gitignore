@@ -32,3 +32,12 @@ tst
 
 #layman
 layman
+
+# vim
+*.swp
+
+# git
+*.orig
+
+# test files
+tests/main.zip
