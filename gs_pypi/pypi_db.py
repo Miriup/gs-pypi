@@ -21,6 +21,7 @@ import re
 import string
 import subprocess
 import tempfile
+import zipfile
 import shutil
 
 from g_sorcery.exceptions import DownloadingError
@@ -634,7 +635,7 @@ class PyPIjsonDataRepository(object):
         """
         with self.open_repository() as z:
             firstletterdirs = self.get_root_dir(z)
-            for firstletterdir in datadir.iterdir():
+            for firstletterdir in firstletterdirs.iterdir():
                 # There exist some metadata files which do not interest us
                 if firstletterdir.is_dir():
                     for second in firstletterdir.iterdir():
@@ -652,7 +653,26 @@ class PyPIjsonDataRepository(object):
 class PyPIjsonDataFromZip(PyPIjsonDataRepository):
     """
     Read ZIP file with PyPI package data in JSON format
-
+    >>> import gs_pypi.pypi_db
+    >>> z=gs_pypi.pypi_db.PyPIjsonDataFromZip("tests/main.zip")
+    >>> z.set_processor(gs_pypi.pypi_db.PyPIdump())
+    >>> try:
+    ...     z.parse_data()
+    ... except gs_pypi.pypi_db.DoctestFinishedException:
+    ...     pass
+    ...
+     * 0-._.-._.-._.-._.-._.-._.-0.json
+     * 0-core-client.json
+     * 0-orchestrator.json
+     * 0.0.1.json
+     * 0.618.json
+     * 0.json
+     * 00-viet-nam-on-top-00.json
+     * 000.json
+     * 00000.json
+     * 0000000.json
+     * 00000000.json
+    >>>
     """
 
     def __init__(self,mainzip):
@@ -662,15 +682,39 @@ class PyPIjsonDataFromZip(PyPIjsonDataRepository):
         """
         Reset package data and open ZIP file
         """
-        self.zip = zipfile.ZipFile(mainzip)
+        self.zip = zipfile.ZipFile(self.mainzip)
         return self.zip
 
     def get_root_dir(self,z):
-        return zipfile.Path(z).at("pypi-json-data-main/release_data")
+        """
+        Get the root directory to traverse
+
+        FIXME Why pass z?
+        """
+        #_logger.info(z)
+        return zipfile.Path(z, at="pypi-json-data-main/release_data/")
 
     def close_repository(self):
         self.zip.close()
 
+class DoctestFinishedException(Exception):
+    """
+    doctest helper exception, raised when 10 files have been dumped
+    """
+    pass
+
+class PyPIdump(object):
+    """
+    Helper class for doctests: Dumps the first 10 entries of main.zip
+    """
+    def __init__(self):
+        self.remaining = 10
+
+    def process_file(self,entry,f):
+        _logger.info( entry.name )
+        self.remaining = self.remaining-1
+        if self.remaining<0:
+            raise DoctestFinishedException("Done")
 
 class SourceURI(object):
     """
