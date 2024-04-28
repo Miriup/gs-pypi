@@ -577,8 +577,9 @@ class PypiDBGenerator(DBGenerator):
         """
         Handle downloaded main.zip from github pypi-json-data
         """
-        _logger.info('Copying package index to %s' % self.persistent_datadir / "main.zip")
-        shutil.copyfile(download,self.persistent_datadir / "main.zip")
+        _logger.info('Copying package index to %s' % self.pkg_db.persistent_datadir + "/main.zip")
+        os.mkdir(self.pkg_db.persistent_datadir)
+        shutil.copyfile(download,self.pkg_db.persistent_datadir + "/main.zip")
 
 class PyPIjsonDataRepository(object):
 
