@@ -516,8 +516,8 @@ class PypiDBGenerator(DBGenerator):
     """
 
     def __init__(self, *args, **kwargs):
-        self.package_db_class = PyPIjsonDataIterator
         super().__init__(*args,**kwargs)
+        self.package_db_class = PyPIjsonDataIterator
 
     def generate_tree(self, pkg_db, common_config, config):
         # The g-sorcery interface asks me to carry along pkg_db and config's
@@ -578,7 +578,8 @@ class PypiDBGenerator(DBGenerator):
         Handle downloaded main.zip from github pypi-json-data
         """
         _logger.info('Copying package index to %s' % self.pkg_db.persistent_datadir + "/main.zip")
-        os.mkdir(self.pkg_db.persistent_datadir)
+        if not os.path.exists(self.pkg_db.persistent_datadir):
+            os.mkdir(self.pkg_db.persistent_datadir)
         shutil.copyfile(download,self.pkg_db.persistent_datadir + "/main.zip")
 
 class PyPIjsonDataRepository(object):
@@ -588,6 +589,7 @@ class PyPIjsonDataRepository(object):
     filesystem access of this call is
     importlib.resources.abc.Traversable
     """
+
     def resolve_pn(self,datapath):
         package = datapath.stem
         if package in self.exclude:
@@ -1271,3 +1273,5 @@ class PyPIpeline(object):
         is just a package name.
         """
         return Dependency("dev-python", dependency)
+
+# vim:expandtab
