@@ -332,18 +332,25 @@ class PyPIjsonDataPackageDB(PackageDB):
         super().__init__(*args,**kwargs)
 
     def __iter__(self):
+        _logger.info("PyPIjsonDataPackageDB")
         return PyPIjsonDataIterator(PyPIjsonDataFromZip(self.persistent_datadir / "main.zip"))
 
 class PyPIjsonDataIterator(object):
     """
     Iterator producing a package_db.database.items() structure (see Iterator class in g-sorcery package_db.py)
-
     """
 
-    def __init__(self,db,reader):
+#    def __init__(self, directory,
+#                 persistent_datadir = None,
+#                 preferred_layout_version=1,
+#                 preferred_db_version=1,
+#                 preferred_category_format=JSON_FILE_SUFFIX):
+    def __init__(self,reader):
+        _logger.info("PyPIjsonDataIterator")
         self.reader = reader
 
     def __iter__(self):
+        _logger.info("PyPIjsonDataIterator iter")
         return ("dev-python",PyPIjsonDataIteratorPackage(self.reader))
 
 class PyPIjsonDataIteratorPackage(object):
@@ -515,9 +522,16 @@ class PypiDBGenerator(DBGenerator):
     Implementation of database generator for PYPI backend.
     """
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args,**kwargs)
-        self.package_db_class = PyPIjsonDataIterator
+    def __call__(self,*args,**kwargs):
+        """
+        Create package database and place our dynamic hooks in it
+        """
+        _logger.info("Opening ")
+        pkg_db = super().__call__(*args,**kwargs)
+        z=PyPIjsonDataFromZip(pkg_db.persistent_datadir + "/main.zip")
+        # Hack dynamic package info generation into g-sorcery pkg database
+        pkg_db.database = PyPIjsonDataIterator(z)
+        return(pkg_db)
 
     def generate_tree(self, pkg_db, common_config, config):
         # The g-sorcery interface asks me to carry along pkg_db and config's
