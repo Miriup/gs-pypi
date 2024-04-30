@@ -360,8 +360,11 @@ class PyPIjsonDataIteratorItems(object):
         self.parent = parent
 
     def __next__(self):
-        nxt = next(parent)
-        return nxt.items()
+        nxt = next(self.parent)
+        return (str(nxt),nxt)
+
+    def __iter__(self):
+        return self
 
 class PyPIjsonDataIteratorKeys(object):
 
@@ -370,7 +373,10 @@ class PyPIjsonDataIteratorKeys(object):
 
     def __next__(self):
         nxt = next(self.parent)
-        return 
+        return str(nxt)
+
+    def __iter__(self):
+        return self
 
 class PyPIjsonDataIteratorPackages(object):
 
@@ -453,12 +459,19 @@ class PyPIjsonDataIteratorPackages(object):
         return self.__next__()
 
     def __iter__(self):
-        return self
+        return PyPIjsonDataIteratorKeys(self)
 
     def items(self):
-        return list(self)
+        return PyPIjsonDataIteratorItems(self)
 
 class PyPIjsonDataIteratorPackage(object):
+    """
+    Adapter between list of packages and list of versions
+
+    This iterator deals with one package. A string representation gets just the
+    package name.  Iterating through it gets the individual versions of a
+    package.
+    """
 
     def __init__(self,name,path):
         self.path = path
@@ -468,14 +481,24 @@ class PyPIjsonDataIteratorPackage(object):
     def __str__(self):
         return self.name
 
+    def _get_versions(self):
+        """
+        Instantiate versions object only when needed
+        """
+        if self.versions is None:
+            self.versions = PyPIjsonDataIteratorVersions(self.name,self.path.open())
+        return self.versions
+
     def __iter__(self):
         # If we're here, nxt is pointing to a JSON package
         # definition and we have been able to resolve a package
         # name for the JSON file.
         #
-        if self.versions is None:
-            self.versions = PyPIjsonDataIteratorVersions(self.name,self.path.open())
-        return self.versions
+        # Return {package_name: versions[]}
+        return self._get_versions()
+
+    def items(self):
+        return self._get_versions().items()
 
 class PyPIjsonDataIteratorVersions(object):
     """
@@ -542,6 +565,7 @@ class PyPIjsonDataIteratorEbuildData(object):
         self.pipeline = PyPIpeline()
         self.pipeline.set_pkg_db(self)
         self.pipeline.process_version(package, {version: data})
+
     def in_category(self, category, name):
         return False
 
@@ -668,8 +692,15 @@ class PyPIjsonDataRepository(object):
     """
 
     def resolve_pn(self,datapath):
+        """
+        Resolve a filename to a package name - without consulting the JSON
+
+        Inputs:
+        * datapath pathlib.Path object representing the filename
+        """
         package = datapath.stem
         if package in PypiDBGenerator.exclude:
+            _logger.info(f"Package {package} in DBGenerator exclude")
             return None
         if (not os.environ.get('GSPYPI_INCLUDE_UNCOMMON')
                 and len(PypiDBGenerator.wanted) > 0
@@ -815,13 +846,15 @@ class SourceURI(object):
     """
     Capture SRC_URI together with checksums
 
+    TODO: This class really belongs into g-sorcery as it is relevant to every generator.
+
     >>> import gs_pypi
     >>> src_uri=gs_pypi.pypi_db.SourceURI(uri="https://files.pythonhosted.org/packages/16/fc/764c31a0ced73481d033d7a267d185f865abeeb073c410b2fdff9680504f/transform3d-0.0.0-py3-none-any.whl")
     >>> print(src_uri)
     https://files.pythonhosted.org/packages/16/fc/764c31a0ced73481d033d7a267d185f865abeeb073c410b2fdff9680504f/transform3d-0.0.0-py3-none-any.whl
     >>> print(src_uri.split("/"))
     ['https:', '', 'files.pythonhosted.org', 'packages', '16', 'fc', '764c31a0ced73481d033d7a267d185f865abeeb073c410b2fdff9680504f', 'transform3d-0.0.0-py3-none-any.whl']
-    >>> src_uri.setHash("md5","4d64f08f869dc9c8b3f8affa03b37e5f")
+    >>> src_uri.set_hash("md5","4d64f08f869dc9c8b3f8affa03b37e5f")
     >>> src_uri.hashes
     {'MD5': '4d64f08f869dc9c8b3f8affa03b37e5f'}
     >>> print(src_uri)
@@ -833,20 +866,35 @@ class SourceURI(object):
     hash_translation_table = {
         "md5": "MD5",
         "sha256": "SHA256",
-        "blake2b_256": "BLAKE2B_256"
+        # According
+        # https://crypto.stackexchange.com/questions/57600/recommended-key-lengths-for-blake2b
+        # it works with any key length, so let's assume we can map them all to BLAKE2B.
+        # TODO Does the portage code work with flexible key length?
+        "blake2b_256": "BLAKE2B",
         }
 
-    def __init__(self,uri=None,hashes=None):
+    def __init__(self,uri=None,size=None,hashes=None):
         self.uri = uri
+        self.size = size
         self.hashes = {}
+        # FIXME Use the map() function
         if hashes is not None:
             self.hashes_from_pypi(hashes)
 
     def hashes_from_pypi(self,hashes):
         for h,v in hashes.items():
-            self.setHash(h,v)
+            self.set_hash(h,v)
 
-    def setHash(self,h,v):
+    def get_hashes(self):
+        return self.hashes
+
+    def set_size(self,size):
+        self.size = size
+
+    def get_size(self):
+        return self.size
+
+    def set_hash(self,h,v):
         """
         Set single hash
         """
@@ -1091,14 +1139,14 @@ class PyPIpeline(object):
                                 variant.update({
                                     'key': key,
                                     'pkg_datum': datum,
-                                    'src_uri': SourceURI(uri=entry['url'],hashes=entry["digests"]),
+                                    'src_uri': SourceURI(uri=entry['url'],size=entry['size'],hashes=entry["digests"]),
                                 })
                     else:
                         if entry['packagetype'] == 'sdist':
                             variant.update({
                                 'key': key,
                                 'pkg_datum': datum,
-                                'src_uri': SourceURI(uri=entry['url'],hashes=entry["digests"]),
+                                'src_uri': SourceURI(uri=entry['url'],size=entry['size'],hashes=entry["digests"]),
                             })
                             break
 
@@ -1339,11 +1387,12 @@ class PyPIpeline(object):
                        src_uri, use_wheel, aberrations):
         ebuild_data = self.get_ebuild_data(package, pkg_datum,
                        src_uri, use_wheel, aberrations)
-        package = Package("dev-python", ebuild_data['realname'], ebuild_data['realversion'])
-        if self._is_package_addable(
-                package,
-                ebuild_data):
-            self.pkg_db.add_package(package, ebuild_data)
+        if ebuild_data is not None:
+            package = Package("dev-python", ebuild_data['realname'], ebuild_data['realversion'])
+            if self._is_package_addable(
+                    package,
+                    ebuild_data):
+                self.pkg_db.add_package(package, ebuild_data)
 
     def convert_internal_dependency(self, configs, dependency):
         """
