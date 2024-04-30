@@ -328,12 +328,13 @@ def sanitize_useflag(useflag):
 
 class PyPIjsonDataPackageDB(PackageDB):
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args,**kwargs)
+#    def __init__(self, *args, **kwargs):
 
-    def __iter__(self):
-        _logger.info("PyPIjsonDataPackageDB")
-        return PyPIjsonDataIterator(PyPIjsonDataFromZip(self.persistent_datadir / "main.zip"))
+    def read(self):
+        super().read()
+        _logger.info("Loading dynamic database enhancement")
+        z=PyPIjsonDataFromZip(self.persistent_datadir + "/main.zip")
+        self.database["dev-python"]['packages'] = PyPIjsonDataIteratorPackages(z)
 
 class PyPIjsonDataIterator(object):
     """
@@ -351,13 +352,30 @@ class PyPIjsonDataIterator(object):
 
     def __iter__(self):
         _logger.info("PyPIjsonDataIterator iter")
-        return ("dev-python",PyPIjsonDataIteratorPackage(self.reader))
+        return ("dev-python",PyPIjsonDataIteratorPackages(self.reader))
 
-class PyPIjsonDataIteratorPackage(object):
+class PyPIjsonDataIteratorItems(object):
 
-    # FIXME How does the repository object come here?
-    def __init__(self,db):
-        self.reader = db
+    def __init__(self,parent):
+        self.parent = parent
+
+    def __next__(self):
+        nxt = next(parent)
+        return nxt.items()
+
+class PyPIjsonDataIteratorKeys(object):
+
+    def __init__(self,parent):
+        self.parent = parent
+
+    def __next__(self):
+        nxt = next(self.parent)
+        return 
+
+class PyPIjsonDataIteratorPackages(object):
+
+    def __init__(self,reader):
+        self.reader = reader
         self.repository = None
 
     def __next__(self):
@@ -365,56 +383,106 @@ class PyPIjsonDataIteratorPackage(object):
         # When we don't have a repository, we don't have main.zip open
         if self.repository is None:
             self.repository = self.reader.open_repository()
-            self.first_letter_iter = None
-            self.second_letter_iter = None
+            self.first_letter_iter = None       # root iterator
+            self.second_letter_iter = None      # first letter iterator
+            self.third_iter = None              # second letter iterator
         # When first_letter_iter is None, we aren't iterating yet
-        if first_letter_iter is None:
-            # FIXME Does this work?
+        if self.first_letter_iter is None:
             self.first_letter_iter = self.reader.get_root_dir(self.repository).iterdir()
             self.second_letter_iter = None
+            self.third_iter = None
         # first_letter_iter is now not None. If we don't have
-        # second_letter_iter we may have to dive into secondary directories
-        if second_letter_iter is None:
+        # second_letter_iter we may have to dive into primary directories
+        if self.second_letter_iter is None:
             try:
-                nxt = next(first_letter_iter)
+                nxt = next(self.first_letter_iter)
                 if nxt.is_dir():
-                    self.second_letter_iter = self.firstletterdir.iterdir()
+                    _logger.info(f"Diving(1) into {nxt}")
+                    self.second_letter_iter = nxt.iterdir()
+                    self.third_iter = None
                     nxt = None
             except StopIteration:
                 # If we're here, then there is no more files in the root
                 # (first-level) directory
                 self.first_letter_iter = None
+                self.second_letter_iter = None
+                self.third_iter = None
                 raise
         # If we're here, nxt is not None, second_letter_iter is None and
         # first_letter_iter is not None, then we're dealing with some JSON
         # files in the first-level directory that the original code also tried
         # to capture.
-        if nxt is None:
+        if nxt is None and self.second_letter_iter is not None and self.third_iter is None:
             try:
                 nxt = next(self.second_letter_iter)
+                if nxt.is_dir():
+                    self.third_iter = nxt.iterdir()
+                    nxt = None
             except StopIteration:
                 # If we're here, then we reached the end of the current second
                 # level directory and have to continue reading the next
                 # firstlevel directory.
                 self.second_letter_iter = None
-                pass
-        if nxt is not None and nxt.is_file() and nxt.suffix == '.json':
-            with nxt.open() as f:
-                # Determine package name
-                resolved = self.repository.resolve_pn(datapath)
-                # Return {package_name: versions[]}
-                return {resolved: PyPIjsonDataIteratorVersion(resolved,f)}
+                self.third_iter = None
+                nxt = None
+        # Third level is the actual level with most JSON files.
+        # nxt is None when the previous step encountered a directory -> loop it
+        #
+        if nxt is None and self.second_letter_iter is not None and self.third_iter is not None:
+            try:
+                nxt = next(self.third_iter)
+            except StopIteration:
+                self.third_iter = None
+                nxt = None
+                #return self.__next__()  # recursively resolve next entry
+        # If nxt is None, then previous code asks for the next round in the
+        # loop (i.e. a continue statement).
+        # We do not look into JSON files in the root of the directory.
+        #
+        # Otherwise if nxt is a file we open it.
+        if nxt is not None and self.second_letter_iter is not None and nxt.is_file() and nxt.suffix == '.json':
+            # Determine package name
+            resolved = self.reader.resolve_pn(nxt)
+            if resolved is not None:
+                return PyPIjsonDataIteratorPackage(resolved,nxt)
         # Recursion either when the second-level directory reached the end or
         # nxt isn't a JSON file we're looking for. This shouldn't loop forever,
         # because the StopIteration of the first-level iterable is raised.
-        return __next__(self)
+        # It can reach maximum recursion depth, though, when resolve_pn rejects
+        # the majority of JSON files
+        return self.__next__()
 
-class PyPIjsonDataIteratorVersion(object):
+    def __iter__(self):
+        return self
+
+    def items(self):
+        return list(self)
+
+class PyPIjsonDataIteratorPackage(object):
+
+    def __init__(self,name,path):
+        self.path = path
+        self.name = name
+        self.versions = None
+
+    def __str__(self):
+        return self.name
+
+    def __iter__(self):
+        # If we're here, nxt is pointing to a JSON package
+        # definition and we have been able to resolve a package
+        # name for the JSON file.
+        #
+        if self.versions is None:
+            self.versions = PyPIjsonDataIteratorVersions(self.name,self.path.open())
+        return self.versions
+
+class PyPIjsonDataIteratorVersions(object):
     """
     Iterator effectively parsing through one PyPI JSON file
 
     >>> import gs_pypi.pypi_db,pprint
-    >>> i=gs_pypi.pypi_db.PyPIjsonDataIteratorVersion("transform3d",open("tests/transform3d.json"))
+    >>> i=gs_pypi.pypi_db.PyPIjsonDataIteratorVersions("transform3d",open("tests/transform3d.json"))
      * Processing transform3d.
      * Creating 0.0.0.
      * Processing transform3d.
@@ -433,7 +501,10 @@ class PyPIjsonDataIteratorVersion(object):
             self.iter[ver] = PyPIjsonDataIteratorEbuildData(name,ver,data)
 
     def __iter__(self):
-        return iter(self.iter.items())
+        return iter(self.iter)
+
+    def items(self):
+        return self.iter.items()
 
 class PyPIjsonDataIteratorEbuildData(object):
     """
@@ -443,38 +514,26 @@ class PyPIjsonDataIteratorEbuildData(object):
     doctest below tests this.
 
     >>> import gs_pypi.pypi_db,pprint
-    >>> i=gs_pypi.pypi_db.PyPIjsonDataIteratorVersion("transform3d",open("tests/transform3d.json"))
-	 * Processing transform3d.
-	 * Creating 0.0.0.
-	 * Processing transform3d.
-	 * Creating 0.0.1.
-	 * Processing transform3d.
-	 * Creating 0.0.2.
-	 * Processing transform3d.
-	 * Creating 0.0.3.
-	 * Processing transform3d.
-	 * Creating 0.0.4.
-    >>> for ver,ebuild_data in iter(i):
+    >>> i=gs_pypi.pypi_db.PyPIjsonDataIteratorVersions("transform3d",open("tests/transform3d.json"))
+     * Processing transform3d.
+     * Creating 0.0.0.
+     * Processing transform3d.
+     * Creating 0.0.1.
+     * Processing transform3d.
+     * Creating 0.0.2.
+     * Processing transform3d.
+     * Creating 0.0.3.
+     * Processing transform3d.
+     * Creating 0.0.4.
+    >>> for ver,ebuild_data in iter(i.items()):
     ...     print (ver)
     ...     ebuild_data=dict(ebuild_data)
-    ...     pprint.pprint(ebuild_data)
+    ...     pprint.pprint(ebuild_data.keys())
     ...     break
     ... 
     0.0.0
-    {'dependencies': <g_sorcery.g_collections.serializable_elist object at 0x7f02da3edbd0>,
-     'description': 'handy classes for 3d transformations',
-     'distutils_use_pep517': 'standalone',
-     'homepage': 'https://github.com/RasmusHaugaard/transform3d',
-     'iuse': '',
-     'license': '',
-     'literalname': '${PN}',
-     'mtime': '2020-07-31T15:33:18.437661+00:00',
-     'python_compat': '( python{3_10,3_11,3_12} )',
-     'realname': '${PN}',
-     'realversion': '${PV}',
-     'repo_uri': 'https://files.pythonhosted.org/packages/source/${REALNAME::1}/${REALNAME}/',
-     'sourcefile': '${REALNAME}-${REALVERSION}.tar.gz',
-     'src_uri': <gs_pypi.pypi_db.SourceURI object at 0x7f02da3ffe10>}
+    dict_keys(['realname', 'literalname', 'realversion', 'mtime', 'description', 'homepage', 'license', 'src_uri', 'sourcefile', 'repo_uri', 'python_compat', 'iuse', 'dependencies', 'distutils_use_pep517'])
+
     """
 
     def __init__(self,package,version,data):
@@ -522,15 +581,19 @@ class PypiDBGenerator(DBGenerator):
     Implementation of database generator for PYPI backend.
     """
 
+    common_config = None
+    config = None
+    exclude = ()
+    wanted = ()
+    substitutions = {}
+    nonice = ()
     def __call__(self,*args,**kwargs):
         """
         Create package database and place our dynamic hooks in it
         """
         _logger.info("Opening ")
+        self.package_db_class=PyPIjsonDataPackageDB
         pkg_db = super().__call__(*args,**kwargs)
-        z=PyPIjsonDataFromZip(pkg_db.persistent_datadir + "/main.zip")
-        # Hack dynamic package info generation into g-sorcery pkg database
-        pkg_db.database = PyPIjsonDataIterator(z)
         return(pkg_db)
 
     def generate_tree(self, pkg_db, common_config, config):
@@ -606,16 +669,17 @@ class PyPIjsonDataRepository(object):
 
     def resolve_pn(self,datapath):
         package = datapath.stem
-        if package in self.exclude:
+        if package in PypiDBGenerator.exclude:
             return None
         if (not os.environ.get('GSPYPI_INCLUDE_UNCOMMON')
-                and package not in self.wanted):
+                and len(PypiDBGenerator.wanted) > 0
+                and package not in PypiDBGenerator.wanted):
             # we only include a selected set of packages as otherwise the
             # overlay becomes unwieldy
             return None
         if package != pypi_normalize(package):
             _logger.warn(f'Unnormalized input package {package}.')
-        resolved = resolve_package_name(package, self.substitutions)
+        resolved = resolve_package_name(package, PypiDBGenerator.substitutions)
         return resolved
 
     def _adjust_datapath(self,datapath,package,resolved):
@@ -751,6 +815,7 @@ class SourceURI(object):
     """
     Capture SRC_URI together with checksums
 
+    >>> import gs_pypi
     >>> src_uri=gs_pypi.pypi_db.SourceURI(uri="https://files.pythonhosted.org/packages/16/fc/764c31a0ced73481d033d7a267d185f865abeeb073c410b2fdff9680504f/transform3d-0.0.0-py3-none-any.whl")
     >>> print(src_uri)
     https://files.pythonhosted.org/packages/16/fc/764c31a0ced73481d033d7a267d185f865abeeb073c410b2fdff9680504f/transform3d-0.0.0-py3-none-any.whl
@@ -767,7 +832,8 @@ class SourceURI(object):
     # How hash functions in PyPI database match to hash functions in portage Manifest
     hash_translation_table = {
         "md5": "MD5",
-        "sha256": "SHA256"
+        "sha256": "SHA256",
+        "blake2b_256": "BLAKE2B_256"
         }
 
     def __init__(self,uri=None,hashes=None):
@@ -1138,10 +1204,8 @@ class PyPIpeline(object):
         else:
             python_compat = '( python{' + (','.join(py_versions)) + '} )'
 
-        # FIXME Fix this
-        self.substitutions = {}
         requires_dist = extract_requires_dist(
-            pkg_datum['info']['requires_dist'], self.substitutions)
+            pkg_datum['info']['requires_dist'], PypiDBGenerator.substitutions)
 
         dependencies = []
         useflags = set()
