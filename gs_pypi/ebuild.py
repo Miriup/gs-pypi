@@ -59,7 +59,7 @@ class PypiEbuildWithDigestGenerator(DefaultEbuildGenerator):
             {"name": "python_compat", "raw": True},
             {"name": "distutils_use_pep517", "raw": True},]
 
-        inherit = ["python-r1", "gs-pypi"]
+        inherit = ["python-r1"]
 
         vars_after_description = [
             "homepage", "license", "src_uri", "sourcefile",
