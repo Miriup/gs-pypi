@@ -103,29 +103,31 @@ def parse_version(s, minlength=0, strict=False):
 
     Examles given at https://packaging.python.org/en/latest/discussions/versioning/
 
-    >>> parse_version('1.2.0')
+    >>> str(parse_version('1.2.0'))
     '1.2.0'
-    >>> parse_version('1.2.0.dev1')
+    >>> str(parse_version('1.2.0.dev1'))
     '1.2.0.9999.1'
-    >>> parse_version('1.2.0a1')
+    >>> str(parse_version('1.2.0a1'))
     '1.2.0_alpha1'
-    >>> parse_version('1.2.0b1')
+    >>> str(parse_version('1.2.0b1'))
     '1.2.0_beta1'
-    >>> parse_version('1.2.0rc1')
+    >>> str(parse_version('1.2.0rc1'))
     '1.2.0_rc1'
-    >>> parse_version('1.2.0.post1')
+    >>> str(parse_version('1.2.0.post1'))
     '1.2.0_p1'
-    >>> parse_version('1.2.0a1.post1')
+    >>> str(parse_version('1.2.0a1.post1'))
     '1.2.0_alpha1_p1'
-    >>> parse_version('23.12')
+    >>> str(parse_version('23.12'))
     '23.12'
-    >>> parse_version('42')
+    >>> str(parse_version('42'))
     '42'
-    >>> parse_version('1!1.0')
+    >>> str(parse_version('1!1.0'))
     'uff'
     # Local version modifiers
-    >>> parse_version('0.5.dev1+gd00980f')
-    >>> parse_version('0.5.dev1+gd00980f.d20231217')
+    >>> str(parse_version('0.5.dev1+gd00980f'))
+    '0.5.9999.1'
+    >>> str(parse_version('0.5.dev1+gd00980f.d20231217'))
+    '0.5.9999.1'
     """
     if mo := re.fullmatch(r'(rev|v)?([0-9]+[\.0-9]*)(.*)', s.strip(), re.I):
         _, version, tail = mo.groups('0')
@@ -837,14 +839,15 @@ class PypiVersion(Version):
 
     Does the same job as the parse_version function
 
+    >>> import gs_pypi.pypi_db
     >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.2.1dev-r4679"))
-    0.2.1.9999-r4679
+    None
     >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.5.15dev-r3581"))
-    0.5.15.9999-r3581
+    None
     >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.1.1c.alpha"))
-    0.1.1c_alpha
+    None
     >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.3dev-r9926"))
-    0.3.9999-r9926
+    None
     """
 
     VERSION_PATTERN = r"""
@@ -887,8 +890,8 @@ class PypiVersion(Version):
         'pre':     'pre',
         'preview': 'pre',
         'post':    'p',
-        'rev':     'r',     #
-        'r':       'r',     #
+        'rev':     'revision',
+        'r':       'revision',
         }
 
     # Code below copied from PEP-0400 Appendix B
@@ -902,21 +905,56 @@ class PypiVersion(Version):
         """
         Parses a PyPI version and generates a g-sorcery Version object out of it
 
+        Contains examles given at https://packaging.python.org/en/latest/discussions/versioning/
+
         >>> import gs_pypi.pypi_db
         >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0"))
         '0'
         >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.2.1-r4679-dev"))
         '0.2.1.9999-r4679'
-
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.2.1dev-r4679"))
+        None
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.5.15dev-r3581"))
+        None
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.1.1c.alpha"))
+        None
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.3dev-r9926"))
+        None
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('1.2.0'))
+        '1.2.0'
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('1.2.0.dev1'))
+        '1.2.0.9999.1'
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('1.2.0a1'))
+        '1.2.0_alpha1'
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('1.2.0b1'))
+        '1.2.0_beta1'
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('1.2.0rc1'))
+        '1.2.0_rc1'
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('1.2.0.post1'))
+        '1.2.0_p1'
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('1.2.0a1.post1'))
+        '1.2.0_alpha1_p1'
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('23.12'))
+        '23.12'
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('42'))
+        '42'
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('1!1.0'))
+        '1.0'
+        # Local version modifiers
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('0.5.dev1+gd00980f'))
+        '0.5.9999.1'
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('0.5.dev1+gd00980f.d20231217'))
+        '0.5.9999.1'
         """
         m=cls.pypi_version_regex.fullmatch(pypi_version)
         if m is None:
-            _logger.info( f"Version {pypi_version} is not parsable." )
+            #_logger.info( f"Version {pypi_version} is not parsable." )
             return None # unparseable
-        # FIXME the m handling below is pseudo code
         kwargs={}
         release = m.group("release").split(".")
-        pprint.pprint( release )
+        #pprint.pprint(release)
+        #re.fullmatch(r'([0-9]+[\.0-9]*)', s.strip(), re.I)
+        #pprint.pprint( release )
         if m.group("epoch") is not None:
             #self.suffixes.append(("p",m["epoch"]))
             _logger.info( "Epoch: %s" % m.group("epoch") )
@@ -927,21 +965,21 @@ class PypiVersion(Version):
             release.append("9999")
             dev_rel = m.group("dev_n")
             if dev_rel:
-                release.append(dev.group("dev_n"))
-        # Go through pre-release and post-release suffixes
-        for suffix in cls.PRE_MAPPING_PYPI_GENTOO.keys():
-            try:
-                for section in ["pre","post"]:
-                    g=m.group(section)
-                    if g is not None:
-                        if suffix == m.group("%s_l" % section):
-                            kwargs[cls.PRE_MAPPING_PYPI_GENTOO[suffix]] = m.group("%s_n" % section)
-            except AttributeError:
-                # When a suffix is not in the translation table,
-                # Let's ignore it.
-                continue
-        release = m.group("release").split(".")
-        self = cls('.'.join(release),**kwargs)
+                release.append(m.group("dev_n"))
+        if m.group("pre"):
+            suffix=m.group("pre_l")
+            if suffix in cls.PRE_MAPPING_PYPI_GENTOO:
+                kwargs[cls.PRE_MAPPING_PYPI_GENTOO[suffix]] = m.group("pre_n")
+        if m.group("post"):
+            suffix=m.group("post_l")
+            if suffix in cls.PRE_MAPPING_PYPI_GENTOO:
+                n = m.group("post_n1")
+                if n is None:
+                    n = m.group("post_n2")
+                if n is None:
+                    n = 0
+                kwargs[cls.PRE_MAPPING_PYPI_GENTOO[suffix]] = n
+        self = cls(release,**kwargs)
         return(self)
 
 class PyPIjsonDataFromZip(PyPIjsonDataRepository):
