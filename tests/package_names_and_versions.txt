@@ -1,0 +1,37 @@
+
+	Basic idea:
+	1. Go through PyPI package index and check if there are any packages not
+	   adhering to Python naming standards. If there are, we don't have to
+	   busy ourselves with them.
+	2. Translate package name and version using gs-pypi means and then check
+	   if they
+	   a) Adhere to Gentoo naming standards
+	   b) If our predicted version translation matches what we think it should
+	      be
+
+	Resources:
+	* https://peps.python.org/pep-0440/
+	  Python version naming standard
+	* https://packaging.python.org/en/latest/discussions/versioning/
+	  More on Python versioning
+	* https://devmanual.gentoo.org/ebuild-writing/file-format/index.html#file-naming-rules
+	  Gentoo versioning explanation
+	* https://blogs.gentoo.org/mgorny/2023/02/09/the-inconsistencies-around-python-package-naming-and-the-new-policy/
+	  Michał Górny's beautiful blog entry on Python vs Gentoo versioning
+	* https://projects.gentoo.org/pms/8/pms.html#x1-180003.1.2
+	  Package naming convention according to Package Manager Specification
+	* PEP-0008 states Python packages should also have short, all-lowercase
+	  names, although the use of underscores is discouraged.
+
+	PMS 3.1.2 states a package name is /^[A-Za-z0-9-][A-Za-z0-9+_-]*[A-Za-z0-9+_]$/
+	This is actually wrong, because a single-letter or single-digit package
+	name would also be allowed, but I can't quickly come up with a regular
+	expression. I guess for our purposes the above fits.
+
+	PMS 3.2 states a version is /^[0-9]+(\.[0-9]+)*[a-z]?((_alpha|_beta|_pre|_rc|_p)\u)*-r\d$/
+
+	PEP 0440 Appendix B gives a regular expression for PyPI version identifiers.
+	It's copied below as VERSION_PATTERN.
+	see https://peps.python.org/pep-0440/#appendix-b-parsing-version-strings-with-regular-expressions
+
+# vim:expandtab:fileencoding=utf-8

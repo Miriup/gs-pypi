@@ -691,12 +691,17 @@ class PyPIjsonDataRepository(object):
     importlib.resources.abc.Traversable
     """
 
-    def resolve_pn(self,datapath):
+    @staticmethod
+    def resolve_pn(datapath):
         """
         Resolve a filename to a package name - without consulting the JSON
 
+        More clear: Translate a package name adhering to the PyPI naming
+                    standard to the Gentoo naming standard.
+
         Inputs:
         * datapath pathlib.Path object representing the filename
+
         """
         package = datapath.stem
         if package in PypiDBGenerator.exclude:
@@ -803,12 +808,14 @@ class PyPIjsonDataFromZip(PyPIjsonDataRepository):
 
     def __init__(self,mainzip):
         self.mainzip = mainzip
+        self.zip = None
 
     def open_repository(self):
         """
         Reset package data and open ZIP file
         """
-        self.zip = zipfile.ZipFile(self.mainzip)
+        if self.zip is None:
+            self.zip = zipfile.ZipFile(self.mainzip)
         return self.zip
 
     def get_root_dir(self,z):
@@ -821,7 +828,13 @@ class PyPIjsonDataFromZip(PyPIjsonDataRepository):
         return zipfile.Path(z, at="pypi-json-data-main/release_data/")
 
     def close_repository(self):
-        self.zip.close()
+        """
+        Close the repository
+        """
+        # We do not close the ZIP file so subsequent operations can use it.
+        # (As of this writing this is only the case with unittests)
+        #self.zip.close()
+        pass
 
 class DoctestFinishedException(Exception):
     """
