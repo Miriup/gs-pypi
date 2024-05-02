@@ -3,6 +3,7 @@ import unittest
 import gs_pypi.pypi_db
 import re
 import json
+import portage.versions
 
 class TestPackageNamingStandardAdherence(unittest.TestCase):
     """
@@ -10,6 +11,7 @@ class TestPackageNamingStandardAdherence(unittest.TestCase):
 
     """
 
+    # Code below copied from https://packaging.python.org/en/latest/specifications/version-specifiers/#version-specifiers-regex
     VERSION_PATTERN = r"""
         v?
         (?:
@@ -48,13 +50,19 @@ class TestPackageNamingStandardAdherence(unittest.TestCase):
         We need working access to main.zip in all cases. B-)
         """
         self.zip = gs_pypi.pypi_db.PyPIjsonDataFromZip("tests/main.zip")
-        # Code below copied from PEP-0400 Appendix B
+        # Code below copied from https://packaging.python.org/en/latest/specifications/name-normalization/
+        self.pypi_name_regex = re.compile( 
+            r"^([A-Z0-9]|[A-Z0-9][A-Z0-9._-]*[A-Z0-9])$",
+            re.VERBOSE | re.IGNORECASE,
+            )
+        # Code below copied from https://packaging.python.org/en/latest/specifications/version-specifiers/#version-specifiers-regex
         self.pypi_version_regex = re.compile(
             r"^\s*" + self.VERSION_PATTERN + r"\s*$",
             re.VERBOSE | re.IGNORECASE,
-            )
-        self.gentoo_name_regex = re.compile(r"^[A-Za-z0-9-][A-Za-z0-9+_-]*[A-Za-z0-9+_]$")
-        self.gentoo_version_regex = re.compile(r"^[0-9]+(\.[0-9]+)*[a-z]?((_alpha|_beta|_pre|_rc|_p)[0-9]*)*(-r[0-9])?$")
+        )
+        # Below we're importing a private variable... lalalalala...
+        self.gentoo_name_regex = re.compile(portage.versions._pkg) #re.compile(r"^[A-Za-z0-9-][A-Za-z0-9+_-]*[A-Za-z0-9+_]$")
+        self.gentoo_version_regex = portage.versions.ver_regexp #re.compile(r"^[0-9]+(\.[0-9]+)*[a-z]?((_alpha|_beta|_pre|_rc|_p)[0-9]*)*(-r[0-9])?$")
 
     class CallParent(object):
 
@@ -71,14 +79,22 @@ class TestPackageNamingStandardAdherence(unittest.TestCase):
     
     def check_pypi_name(self,entry,f):
         """
-        There isn't really any naming standard for Python packages
+        Check PyPI package name
         """
-        with self.subTest(entry.name):
-            pass
+        name = gs_pypi.pypi_db.pypi_normalize(entry.stem)
+        with self.subTest(name):
+            #self.counter-=1
+            #if self.counter<0: 
+            #    raise TestPackageNamingStandardAdherence.TestFinishedException
+            self.assertIsNotNone(self.pypi_name_regex.fullmatch(name))
     
     def test_pypi_names(self):
         self.zip.set_processor(TestPackageNamingStandardAdherence.CallPypiName(self))
-        self.zip.parse_data()
+        self.counter=10
+        try:
+            self.zip.parse_data()
+        except TestPackageNamingStandardAdherence.TestFinishedException:
+            pass
     
     #
     # Test pypi versions
@@ -132,7 +148,7 @@ class TestPackageNamingStandardAdherence(unittest.TestCase):
         for package,versions in i.items():
             #counter-=1
             #if counter<0: return
-            for version,ebuild_data in versions.items():
+            for version in versions:
                 with self.subTest("%s %s" % (package,version)):
                     m=self.gentoo_version_regex.fullmatch(version)
                     self.assertIsNotNone(m)

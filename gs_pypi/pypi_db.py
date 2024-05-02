@@ -53,6 +53,11 @@ def containment(fun):
 
 
 def pypi_normalize(pkg):
+    """
+    Normalise package name
+
+    Code below from https://packaging.python.org/en/latest/specifications/name-normalization/
+    """
     return re.sub(r"[-_.]+", "-", pkg).lower()
 
 
@@ -79,6 +84,24 @@ class Operator(enum.Enum):
 
 
 def parse_version(s, minlength=0, strict=False):
+    """
+    Converts a PyPI version to a Gentoo version
+
+    Parsing should in principle conform to
+    https://packaging.python.org/en/latest/specifications/version-specifiers/
+
+    >>> from gs_pypi.pypi_db import parse_version
+    >>> str(parse_version("0.2.1dev-r4679"))
+    '0.2.1_pre4679'
+    >>> str(parse_version("0.5.15dev-r3581"))
+    '0.5.15_pre3581'
+    >>> str(parse_version("0.1.1c.alpha"))
+     * Omitted version tail `c.alpha`.
+    '0.1.1'
+    >>> str(parse_version("0.3dev-r9926"))
+    '0.3_pre9926'
+
+    """
     if mo := re.fullmatch(r'(rev|v)?([0-9]+[\.0-9]*)(.*)', s.strip(), re.I):
         _, version, tail = mo.groups('0')
         components = tuple(map(int, filter(None, version.split('.'))))
@@ -519,12 +542,14 @@ class PyPIjsonDataIteratorVersions(object):
     """
 
     def __init__(self,name,f):
-        self.iter = {}
+        self.versions = {}
         for ver,data in json.load(f).items():
-            self.iter[ver] = PyPIjsonDataIteratorEbuildData(name,ver,data)
+            ver = PypiVersionConverter(ver).to_gentoo()
+            self.versions[ver] = PyPIjsonDataIteratorEbuildData(name,ver,data)
 
     def __iter__(self):
-        return iter(self.iter)
+        return iter(self.versions.keys())
+
 
     def items(self):
         return self.iter.items()
@@ -780,6 +805,119 @@ class PyPIjsonDataRepository(object):
                             with second.open() as f:
                                 self.process_file(second,f)
         return self.close_repository()
+
+class PypiVersion(Version):
+    """
+    Convert PyPI versions to Gentoo versions
+
+    Does the same job as the parse_version function
+
+    >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.2.1dev-r4679"))
+    0.2.1.9999-r4679
+    >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.5.15dev-r3581"))
+    0.5.15.9999-r3581
+    >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.1.1c.alpha"))
+    0.1.1c_alpha
+    >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.3dev-r9926"))
+    0.3.9999-r9926
+    """
+
+    VERSION_PATTERN = r"""
+        v?
+        (?:
+            (?:(?P<epoch>[0-9]+)!)?                           # epoch
+            (?P<release>[0-9]+(?:\.[0-9]+)*)                  # release segment
+            (?P<pre>                                          # pre-release
+                [-_\.]?
+                (?P<pre_l>(a|b|c|rc|alpha|beta|pre|preview))
+                [-_\.]?
+                (?P<pre_n>[0-9]+)?
+            )?
+            (?P<post>                                         # post release
+                (?:-(?P<post_n1>[0-9]+))
+                |
+                (?:
+                    [-_\.]?
+                    (?P<post_l>post|rev|r)
+                    [-_\.]?
+                    (?P<post_n2>[0-9]+)?
+                )
+            )?
+            (?P<dev>                                          # dev release
+                [-_\.]?
+                (?P<dev_l>dev)
+                [-_\.]?
+                (?P<dev_n>[0-9]+)?
+            )?
+        )
+        (?:\+(?P<local>[a-z0-9]+(?:[-_\.][a-z0-9]+)*))?       # local version
+    """
+
+    PRE_MAPPING_PYPI_GENTOO = {
+        'alpha':   'alpha',
+        'a':       'alpha',
+        'beta':    'beta',
+        'b':       'beta',
+        'rc':      'rc',
+        'pre':     'pre',
+        'preview': 'pre',
+        'post':    'p',
+        'rev':     'r',     #
+        'r':       'r',     #
+        }
+
+    # Code below copied from PEP-0400 Appendix B
+    pypi_version_regex = re.compile(
+        r"^\s*" + VERSION_PATTERN + r"\s*$",
+        re.VERBOSE | re.IGNORECASE,
+        )
+
+    @classmethod
+    def parse_version(cls,pypi_version):
+        """
+        Parses a PyPI version and generates a g-sorcery Version object out of it
+
+        >>> import gs_pypi.pypi_db
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0"))
+        '0'
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.2.1-r4679-dev"))
+        '0.2.1.9999-r4679'
+
+        """
+        m=cls.pypi_version_regex.fullmatch(pypi_version)
+        if m is None:
+            _logger.info( f"Version {pypi_version} is not parsable." )
+            return None # unparseable
+        # FIXME the m handling below is pseudo code
+        kwargs={}
+        release = m.group("release").split(".")
+        pprint.pprint( release )
+        if m.group("epoch") is not None:
+            #self.suffixes.append(("p",m["epoch"]))
+            _logger.info( "Epoch: %s" % m.group("epoch") )
+        # Translate dev version to 9999
+        dev = m.group("dev")
+        if dev is not None:
+            # Translate to 9999 version
+            release.append("9999")
+            dev_rel = m.group("dev_n")
+            if dev_rel:
+                release.append(dev.group("dev_n"))
+        # Go through pre-release and post-release suffixes
+        for suffix in cls.PRE_MAPPING_PYPI_GENTOO.keys():
+            try:
+                for section in ["pre","post"]:
+                    g=m.group(section)
+                    if g is not None:
+                        if suffix == m.group("%s_l" % section):
+                            kwargs[cls.PRE_MAPPING_PYPI_GENTOO[suffix]] = m.group("%s_n" % section)
+            except AttributeError:
+                # When a suffix is not in the translation table,
+                # Let's ignore it.
+                continue
+        release = m.group("release").split(".")
+        self = cls('.'.join(release),**kwargs)
+        return(self)
 
 class PyPIjsonDataFromZip(PyPIjsonDataRepository):
     """

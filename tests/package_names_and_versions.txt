@@ -10,8 +10,8 @@
 	      be
 
 	Resources:
-	* https://peps.python.org/pep-0440/
-	  Python version naming standard
+	* https://packaging.python.org/en/latest/specifications/version-specifiers/#version-specifiers
+	  Python Packaging User Guide
 	* https://packaging.python.org/en/latest/discussions/versioning/
 	  More on Python versioning
 	* https://devmanual.gentoo.org/ebuild-writing/file-format/index.html#file-naming-rules
