@@ -101,6 +101,31 @@ def parse_version(s, minlength=0, strict=False):
     >>> str(parse_version("0.3dev-r9926"))
     '0.3_pre9926'
 
+    Examles given at https://packaging.python.org/en/latest/discussions/versioning/
+
+    >>> parse_version('1.2.0')
+    '1.2.0'
+    >>> parse_version('1.2.0.dev1')
+    '1.2.0.9999.1'
+    >>> parse_version('1.2.0a1')
+    '1.2.0_alpha1'
+    >>> parse_version('1.2.0b1')
+    '1.2.0_beta1'
+    >>> parse_version('1.2.0rc1')
+    '1.2.0_rc1'
+    >>> parse_version('1.2.0.post1')
+    '1.2.0_p1'
+    >>> parse_version('1.2.0a1.post1')
+    '1.2.0_alpha1_p1'
+    >>> parse_version('23.12')
+    '23.12'
+    >>> parse_version('42')
+    '42'
+    >>> parse_version('1!1.0')
+    'uff'
+    # Local version modifiers
+    >>> parse_version('0.5.dev1+gd00980f')
+    >>> parse_version('0.5.dev1+gd00980f.d20231217')
     """
     if mo := re.fullmatch(r'(rev|v)?([0-9]+[\.0-9]*)(.*)', s.strip(), re.I):
         _, version, tail = mo.groups('0')
@@ -1033,6 +1058,7 @@ class SourceURI(object):
             self.hashes_from_pypi(hashes)
 
     def hashes_from_pypi(self,hashes):
+        # FIXME Use the map() function
         for h,v in hashes.items():
             self.set_hash(h,v)
 
@@ -1432,7 +1458,9 @@ class PyPIpeline(object):
 
         filtered_package = sanitize_package_name(package)
         # for accounting note the actual name of the package
+        # MY_PN=
         literal_package = pkg_datum['info']['name']
+        # MY_PV=
         version = pkg_datum["info"]["version"]
         try:
             filtered_version = str(parse_version(version, strict=True))
@@ -1474,7 +1502,7 @@ class PyPIpeline(object):
             if ((mo := re.match(npattern, filename))
                     and package[0] in string.ascii_letters + string.digits
                     #FIXME
-                    #and pypi_normalize(package) not in self.nonice
+                    and pypi_normalize(package) not in DBGenerator.nonice
                     ):
                 name = mo.group(1)
                 # Use redirect URL to avoid churn through the embedded hashes
