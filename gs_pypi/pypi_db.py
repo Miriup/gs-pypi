@@ -90,19 +90,17 @@ def parse_version(s, minlength=0, strict=False):
     Parsing should in principle conform to
     https://packaging.python.org/en/latest/specifications/version-specifiers/
 
-    >>> from gs_pypi.pypi_db import parse_version
-    >>> str(parse_version("0.2.1dev-r4679"))
-    '0.2.1_pre4679'
-    >>> str(parse_version("0.5.15dev-r3581"))
-    '0.5.15_pre3581'
-    >>> str(parse_version("0.1.1c.alpha"))
-     * Omitted version tail `c.alpha`.
-    '0.1.1'
-    >>> str(parse_version("0.3dev-r9926"))
-    '0.3_pre9926'
-
     Examles given at https://packaging.python.org/en/latest/discussions/versioning/
 
+    >>> from gs_pypi.pypi_db import parse_version
+    >>> str(parse_version("0.2.1dev-r4679"))
+    'None'
+    >>> str(parse_version("0.5.15dev-r3581"))
+    'None'
+    >>> str(parse_version("0.1.1c.alpha"))
+    'None'
+    >>> str(parse_version("0.3dev-r9926"))
+    'None'
     >>> str(parse_version('1.2.0'))
     '1.2.0'
     >>> str(parse_version('1.2.0.dev1'))
@@ -569,17 +567,28 @@ class PyPIjsonDataIteratorVersions(object):
     """
 
     def __init__(self,name,f):
+        """
+        Constructor
+
+        >>> import gs_pypi.pypi_db,pprint
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('0.0.0'))
+        '0.0.0'
+        """
         self.versions = {}
+        # Load the data to iterate over first
         for ver,data in json.load(f).items():
-            ver = PypiVersionConverter(ver).to_gentoo()
-            self.versions[ver] = PyPIjsonDataIteratorEbuildData(name,ver,data)
+            ver = PypiVersion.parse_version(ver)
+            self.versions[str(ver)] = PyPIjsonDataIteratorEbuildData(name,ver,data)
+            self.iter=iter(self.versions)
 
-    def __iter__(self):
-        return iter(self.versions.keys())
+    def __next__(self):
+        return next(self.iter)
 
+    def keys(self):
+        return self.versions.keys()
 
     def items(self):
-        return self.iter.items()
+        return self.versions.items()
 
 class PyPIjsonDataIteratorEbuildData(object):
     """
@@ -612,11 +621,24 @@ class PyPIjsonDataIteratorEbuildData(object):
     """
 
     def __init__(self,package,version,data):
+        self.version = version                  # g_collections.Version
         self.json_data = data
         self.ebuild_data = None
         self.pipeline = PyPIpeline()
         self.pipeline.set_pkg_db(self)
-        self.pipeline.process_version(package, {version: data})
+
+    def __str__(self):
+        return str(self.version)
+
+    def _get_ebuild_data(self):
+        """
+        Process the package data and create the ebuild
+
+        Only called when ebuild is accessed
+        """
+        if self.ebuild_data == None:
+            self.pipeline.process_version(package, {version: data})
+        return self.ebuild_data
 
     def in_category(self, category, name):
         return False
@@ -647,10 +669,12 @@ class PyPIjsonDataIteratorEbuildData(object):
         Support accessing data in ebuild_data directly
         from https://stackoverflow.com/questions/39286116/python-class-behaves-like-dictionary-or-list-data-like
         """
-        return self.ebuild_data[key]
+        ebuild_data = self._get_ebuild_data()
+        return ebuild_data[key]
 
     def __setitem__(self,key,value):
-        self.ebuild_data[key]=value
+        ebuild_data = self._get_ebuild_data()
+        ebuild_data[key]=value
 
 class PypiDBGenerator(DBGenerator):
     """
@@ -841,13 +865,13 @@ class PypiVersion(Version):
 
     >>> import gs_pypi.pypi_db
     >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.2.1dev-r4679"))
-    None
+    'None'
     >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.5.15dev-r3581"))
-    None
+    'None'
     >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.1.1c.alpha"))
-    None
+    'None'
     >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.3dev-r9926"))
-    None
+    'None'
     """
 
     VERSION_PATTERN = r"""
@@ -913,13 +937,13 @@ class PypiVersion(Version):
         >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.2.1-r4679-dev"))
         '0.2.1.9999-r4679'
         >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.2.1dev-r4679"))
-        None
+        'None'
         >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.5.15dev-r3581"))
-        None
+        'None'
         >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.1.1c.alpha"))
-        None
+        'None'
         >>> str(gs_pypi.pypi_db.PypiVersion.parse_version("0.3dev-r9926"))
-        None
+        'None'
         >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('1.2.0'))
         '1.2.0'
         >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('1.2.0.dev1'))
@@ -940,7 +964,6 @@ class PypiVersion(Version):
         '42'
         >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('1!1.0'))
         '1.0'
-        # Local version modifiers
         >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('0.5.dev1+gd00980f'))
         '0.5.9999.1'
         >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('0.5.dev1+gd00980f.d20231217'))
@@ -955,9 +978,9 @@ class PypiVersion(Version):
         #pprint.pprint(release)
         #re.fullmatch(r'([0-9]+[\.0-9]*)', s.strip(), re.I)
         #pprint.pprint( release )
-        if m.group("epoch") is not None:
+        #if m.group("epoch") is not None:
             #self.suffixes.append(("p",m["epoch"]))
-            _logger.info( "Epoch: %s" % m.group("epoch") )
+            #_logger.info( "Epoch: %s" % m.group("epoch") )
         # Translate dev version to 9999
         dev = m.group("dev")
         if dev is not None:
@@ -1540,7 +1563,7 @@ class PyPIpeline(object):
             if ((mo := re.match(npattern, filename))
                     and package[0] in string.ascii_letters + string.digits
                     #FIXME
-                    and pypi_normalize(package) not in DBGenerator.nonice
+                    and pypi_normalize(package) not in PypiDBGenerator.nonice
                     ):
                 name = mo.group(1)
                 # Use redirect URL to avoid churn through the embedded hashes

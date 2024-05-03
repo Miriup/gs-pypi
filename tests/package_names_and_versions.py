@@ -152,6 +152,43 @@ class TestPackageNamingStandardAdherence(unittest.TestCase):
                 with self.subTest("%s %s" % (package,version)):
                     m=self.gentoo_version_regex.fullmatch(version)
                     self.assertIsNotNone(m)
+
+    #
+    # Just test version translation
+    #
+    class CallPypiVersionTranslation(CallParent):
+
+        def process_file(self,entry,f):
+            self.parent.check_version_translation(entry,f)
+
+    def check_version_translation(self,entry,f):
+        """
+        Interface method called once for each file in main.zip
+        """
+        j=json.load(f)
+        for v_pypi in j:
+            v_portage=gs_pypi.pypi_db.PypiVersion.parse_version(v_pypi)
+            if self.pypi_version_regex.fullmatch(v_pypi):
+                # Only test PyPI versions that are well formed
+                with self.subTest("%s %s %s" % (entry.name,v_pypi,v_portage) ):
+                    m=self.gentoo_version_regex.fullmatch(str(v_portage))
+                    self.assertIsNotNone(m)
+                if self.counter is not None:
+                    self.counter-=1
+                    if self.counter<0: 
+                        raise TestPackageNamingStandardAdherence.TestFinishedException
+    
+    def test_version_translation(self):
+        """
+        Test version translation algorithm alone
+        """
+        self.zip.set_processor(TestPackageNamingStandardAdherence.CallPypiVersionTranslation(self))
+        self.counter=None
+        try:
+            self.zip.parse_data()
+        except TestPackageNamingStandardAdherence.TestFinishedException:
+            pass
+    
         
 if __name__ == '__main__':
     unittest.main()
