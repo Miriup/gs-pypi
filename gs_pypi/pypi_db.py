@@ -1322,6 +1322,15 @@ class PyPIpeline(object):
         fromiso = datetime.datetime.fromisoformat
 
         def is_prod(v):
+            """
+            Tests whether the version given is a stable version
+
+            Input:
+            * v: g_collections.Version
+
+            Output:
+            * (boolean) True/False
+            """
             return all(part is None for part in [v.alpha, v.beta, v.pre, v.rc])
 
         select = {
@@ -1527,12 +1536,19 @@ class PyPIpeline(object):
                 if (dep['name'] in self.mainpkgs) and dep["versionbound"]:
                     # keep version bounds for packages in the main tree as
                     # there will probably be some choice in the relevant cases
+                    # FIXME portdbapi.xmatch can resolve dependencies bestmatch-visible
+                    #       dev-python/setuptools or related must be able to do
+                    #       it, too
                     dop, dver = dep["versionbound"]
                 else:
                     # ignore version bound as we only provide the most recent
                     # version anyway so there is no choice. Additionally this
                     # fixes broken dependency specs where there either is an
                     # error or which are simply outdated.
+                    # FIXME Dirk, reconsider the above!
+                    #       We are not considering only the most recent version
+                    #       anymore, so there is choice. Gentoo is all about
+                    #       choice! ;-P
                     dop, dver = "", ""
                 dependencies.append(Dependency(
                     category, dep['name'], usedep='${PYTHON_USEDEP}',
@@ -1650,6 +1666,21 @@ class PyPIpeline(object):
 
     def create_package(self, package, pkg_datum,
                        src_uri, use_wheel, aberrations):
+        """
+        Creates the Pypi package in the g-sorcery package database
+
+        Args:
+         * package: package to create
+         * pkg_datum: the JSON data from the pypi-json-data archive
+         * src_uri: where to fetch the DIST files from
+         * use_wheel: Whether to use python binary distributions
+                      (see https://realpython.com/python-wheels/)
+         * aberrations:
+
+        TODO: Do we need to declare a Gentoo package a binary distribution if
+              we use wheels?
+
+        """
         ebuild_data = self.get_ebuild_data(package, pkg_datum,
                        src_uri, use_wheel, aberrations)
         if ebuild_data is not None:
