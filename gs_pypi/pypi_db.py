@@ -120,8 +120,7 @@ def parse_version(s, minlength=0, strict=False):
     >>> str(parse_version('42'))
     '42'
     >>> str(parse_version('1!1.0'))
-    'uff'
-    # Local version modifiers
+    '1.0'
     >>> str(parse_version('0.5.dev1+gd00980f'))
     '0.5.9999.1'
     >>> str(parse_version('0.5.dev1+gd00980f.d20231217'))
@@ -543,7 +542,7 @@ class PyPIjsonDataIteratorPackage(object):
         # name for the JSON file.
         #
         # Return {package_name: versions[]}
-        return self._get_versions()
+        return self._get_versions().__iter__()
 
     def items(self):
         return self._get_versions().items()
@@ -574,21 +573,47 @@ class PyPIjsonDataIteratorVersions(object):
         >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('0.0.0'))
         '0.0.0'
         """
-        self.versions = {}
-        # Load the data to iterate over first
-        for ver,data in json.load(f).items():
-            ver = PypiVersion.parse_version(ver)
-            self.versions[str(ver)] = PyPIjsonDataIteratorEbuildData(name,ver,data)
-            self.iter=iter(self.versions)
+        self.pypi2gentoo = {}
+        self.gentoo2pypi = {}
+        self.json = json.load(f)
+        self.name = name
+        for ver_pypi in self.json:
+            ver_gentoo = PypiVersion.parse_version(ver_pypi)
+            if ver_gentoo is None: continue # ignore unresolvable versions
+            self.pypi2gentoo[ver_pypi] = ver_gentoo    # Keep the Version() object
+            self.gentoo2pypi[str(ver_gentoo)] = ver_pypi
+
+    def __iter__(self):
+        # FIXME Exactly here is where you pick and order versions
+        self.iter = self.gentoo2pypi.keys()
+        return self
 
     def __next__(self):
-        return next(self.iter)
+        try:
+            return self.iter.pop()
+        except AttributeError:
+            raise StopIteration
 
-    def keys(self):
-        return self.versions.keys()
+    def getPypiVersion(self,ver_gentoo):
+        """
+        Translate Gentoo version to PyPI version
+
+        Probably only ever needed for debugging and testing
+        """
+        ver_pypi = self.gentoo2pypi[ver_gentoo]
+
+    def __get__(self,ver_gentoo):
+        """
+        Accessing an attribute instantiates ebuild_data object
+        """
+        ver_pypi = self.gentoo2pypi[ver_gentoo]
+        return PyPIjsonDataIteratorEbuildData(name,self.pypi2gentoo[ver_pypi],self.json[ver_pypi])
 
     def items(self):
-        return self.versions.items()
+        i=[]
+        for ver_gentoo in iter(self):
+            i.append(ver_gentoo,self[ver_gentoo])
+        return i
 
 class PyPIjsonDataIteratorEbuildData(object):
     """
