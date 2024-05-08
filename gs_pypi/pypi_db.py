@@ -1036,6 +1036,60 @@ class PypiVersion(Version):
         self = cls(release,**kwargs)
         return(self)
 
+    def is_prod(self):
+        """
+        Tests whether the version given is a stable version
+
+        Input:
+        * v: g_collections.Version
+
+        Output:
+        * (boolean) True/False
+
+        >>> import gs_pypi.pypi_db,g_sorcery.g_collections
+        >>> gs_pypi.pypi_db.PypiVersion.parse_version("0.2.1dev-r4679").is_prod()
+        Traceback (most recent call last):
+          ...
+        AttributeError: 'NoneType' object has no attribute 'is_prod'
+        >>> gs_pypi.pypi_db.PypiVersion.parse_version("0.5.15dev-r3581").is_prod()
+        Traceback (most recent call last):
+          ...
+        AttributeError: 'NoneType' object has no attribute 'is_prod'
+        >>> gs_pypi.pypi_db.PypiVersion.parse_version("0.2.1dev-r4679").is_prod()
+        Traceback (most recent call last):
+          ...
+        AttributeError: 'NoneType' object has no attribute 'is_prod'
+        >>> gs_pypi.pypi_db.PypiVersion.parse_version("0.3dev-r9926").is_prod()
+        Traceback (most recent call last):
+          ...
+        AttributeError: 'NoneType' object has no attribute 'is_prod'
+        >>> gs_pypi.pypi_db.PypiVersion.parse_version('1.2.0').is_prod()
+        True
+        >>> gs_pypi.pypi_db.PypiVersion.parse_version('1.2.0.dev1').is_prod()
+        False
+        >>> gs_pypi.pypi_db.PypiVersion.parse_version('1.2.0a1').is_prod()
+        False
+        >>> gs_pypi.pypi_db.PypiVersion.parse_version('1.2.0b1').is_prod()
+        False
+        >>> gs_pypi.pypi_db.PypiVersion.parse_version('1.2.0rc1').is_prod()
+        False
+        >>> gs_pypi.pypi_db.PypiVersion.parse_version('1.2.0.post1').is_prod()
+        True
+        >>> gs_pypi.pypi_db.PypiVersion.parse_version('1.2.0a1.post1').is_prod()
+        False
+        >>> gs_pypi.pypi_db.PypiVersion.parse_version('23.12').is_prod()
+        True
+        >>> gs_pypi.pypi_db.PypiVersion.parse_version('42').is_prod()
+        True
+        >>> gs_pypi.pypi_db.PypiVersion.parse_version('1!1.0').is_prod()
+        True
+        >>> gs_pypi.pypi_db.PypiVersion.parse_version('0.5.dev1+gd00980f').is_prod()
+        False
+        >>> gs_pypi.pypi_db.PypiVersion.parse_version('0.5.dev1+gd00980f.d20231217').is_prod()
+        False
+        """
+        return all(part is None for part in [self.alpha, self.beta, self.pre, self.rc]) and "9999" not in self.components
+
 class PyPIjsonDataFromZip(PyPIjsonDataRepository):
     """
     Read ZIP file with PyPI package data in JSON format
@@ -1326,18 +1380,6 @@ class PyPIpeline(object):
         _logger.info(f'Processing {package}.')
 
         fromiso = datetime.datetime.fromisoformat
-
-        def is_prod(v):
-            """
-            Tests whether the version given is a stable version
-
-            Input:
-            * v: g_collections.Version
-
-            Output:
-            * (boolean) True/False
-            """
-            return all(part is None for part in [v.alpha, v.beta, v.pre, v.rc])
 
         select = {
             variant: {
