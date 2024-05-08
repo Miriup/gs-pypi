@@ -23,6 +23,8 @@ import subprocess
 import tempfile
 import zipfile
 import shutil
+import portage.versions
+import portage.dbapi.porttree
 
 from g_sorcery.exceptions import DownloadingError
 from g_sorcery.fileutils import wget
@@ -752,20 +754,24 @@ class PypiDBGenerator(DBGenerator):
         machines, so we should instead take a look into the local Gentoo
         repository in /var/db/repos/gentoo
 
+        Principle process:
+
+        >>> import portage.dbapi.porttree
+        >>> t=portage.dbapi.porttree.portdbapi()
+        >>> l=t.cp_all(categories=["dev-python"])
+        >>> for cp in l:
+        >>>     cpv=t.cp_list(cp)
+        >>> 
+
         """
+        # FIXME This includes now all packages from all configured trees (i.e.
+        #       also all overlays). We need a config options to specify from
+        #       which repositories parent packages should come
         ret = set()
-        fname = "dev-python.html"
-        pattern = (
-            r'<a[^>]*/gentoo.git/tree/dev-python[^>]*>([-a-zA-Z0-9\._]+)</a')
-        with tempfile.TemporaryDirectory() as download_dir:
-            if wget(self.config['gentoo_main_uri'], download_dir, fname):
-                raise DownloadingError("Retrieving main tree directory failed")
-            with open(pathlib.Path(download_dir) / fname) as htmlfile:
-                for line in htmlfile.readlines():
-                    if 'd---------' in line:
-                        if mo := re.search(pattern, line):
-                            ret.add(mo.group(1))
-        _logger.info(f'Total of main tree packages: {len(ret)}.')
+        _logger.info("Reading Gentoo portage tree")
+        self.portage_dbapi = portage.dbapi.porttree.portdbapi()
+        for cp in self.portage_dbapi.cp_all(["dev-python"]):
+            ret.add(cp.split('/')[1])
         return ret
 
     def get_download_uries(self, common_config, config):
@@ -1472,7 +1478,7 @@ class PyPIpeline(object):
         * package:
         * pkg_datum: as it can be found pypi-json-data
 
-        Output passed to self.maybe_add_package:
+        Output
         * pkg_db
         * Package instance - basically an object representing the contents of ${P}
         * ebuild_data: dict with all the fields needed to construct an ebuild
@@ -1530,7 +1536,7 @@ class PyPIpeline(object):
         dependencies = []
         useflags = set()
         # FIXME
-        self.mainpkgs = {}
+        #self.mainpkgs = {}
         for dep in requires_dist:
             for extra in (dep['extras'] or [""]):
                 if (dep['name'] in self.mainpkgs) and dep["versionbound"]:
