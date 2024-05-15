@@ -513,6 +513,18 @@ class PyPIjsonDataIteratorPackages(object):
     def items(self):
         return PyPIjsonDataIteratorItems(self)
 
+class PypiFilterBase(object):
+
+    def __init__(self,parent,param = None):
+        """
+        Input:
+        
+        parent: PyPIjsonDataIteratorVersions object
+        param:  Parameter given with the filter
+        """
+        self.parent = parent
+        self.param = param
+
 class PyPIjsonDataIteratorPackage(object):
     """
     Adapter between list of packages and list of versions
@@ -549,24 +561,334 @@ class PyPIjsonDataIteratorPackage(object):
     def items(self):
         return self._get_versions().items()
 
+class PypiFilterVersionNotExist(PypiFilterBase):
+
+    def filter(self,package,old_json):
+        """
+        Removes ${P} when they already existing in a parent overlay
+
+>>> import gs_pypi.pypi_db
+>>> import g_sorcery.g_collections
+>>> gs_pypi.pypi_db.PypiDBGenerator._getmaintree()
+!!! Repository 'dirks-overlay' has sync-type attribute, but is missing sync-uri attribute
+!!! Section 'guru' in repos.conf has location attribute set to nonexistent directory: '/var/db/repos/guru'
+>>> f=gs_pypi.pypi_db.PypiFilterVersionNotExist(None)
+>>> j={"24.0": {"gentoo": {"package": "pip", "version": g_sorcery.g_collections.Version([24,0])}}, "1.0": {"gentoo": {"package":"pip","version":g_sorcery.g_collections.Version([1,0])}}}
+>>> f.filter("pip",j) # doctest: +ELLIPSIS
+{'1.0': {'gentoo': {'package': 'pip', 'version': <g_sorcery.g_collections.Version object at 0x...>}}}
+>>> 
+
+
+        """
+        new_json={}
+        for ver in old_json:
+            cpv_location,cpv_overlay = PypiDBGenerator.portage_dbapi.findname2("dev-python/%s-%s" % (old_json[ver]["gentoo"]["package"],str(old_json[ver]["gentoo"]["version"])) )
+            if cpv_location is None: 
+                new_json.update({ver:old_json[ver]})
+        return new_json
+
+class PypiFilterVersionHouseOfSuns(PypiFilterBase):
+    """
+    Filter versions of a package with the original houseofsuns method
+
+    In principle the following 3 are collected:
+
+    * the highest stable version
+    * the highest version
+    * the newest version
+
+    All other versions and variants are dropped. The 3 above may result in 1
+    only package version to be selected, when the newest package is also a
+    stable one.
+
+    >>> import gs_pypi.pypi_db,json,pprint
+    >>> f=gs_pypi.pypi_db.PypiFilterVersionHouseOfSuns(None)
+    >>> j=json.load(open("../gs-pypi/tests/transform3d.json"))
+    >>> j=f.filter("transform3d",j)     # doctest: +FAIL_FAST
+    >>> pprint.pprint(j)                # doctest: +ELLIPSIS
+    [{'0.0.4': {'info': {'author': 'Rasmus Laurvig Haugaard',
+                         'author_email': 'rasmus.l.haugaard@gmail.com',
+                         'bugtrack_url': None,
+                         'classifiers': [],
+                         'description_content_type': 'text/markdown',
+                         'docs_url': None,
+                         'download_url': '',
+                         'downloads': ...,
+                         'home_page': 'https://github.com/RasmusHaugaard/transform3d',
+                         'keywords': '',
+                         'license': '',
+                         'maintainer': '',
+                         'maintainer_email': '',
+                         'name': 'transform3d',
+                         'package_url': ...,
+                         'platform': '',
+                         'project_url': ...,
+                         'project_urls': ...,
+                         'release_url': ...,
+                         'requires_dist': [...],
+                         'requires_python': '>=3.6',
+                         'summary': 'Handy classes for working with trees of 3d '
+                                    'transformations.',
+                         'version': '0.0.4',
+                         'yanked': False,
+                         'yanked_reason': None},
+                'urls': [{'comment_text': '',
+                          'digests': {...},
+                          'downloads': -1,
+                          'filename': 'transform3d-0.0.4.tar.gz',
+                          'has_sig': False,
+                          'md5_digest': '...',
+                          'packagetype': 'sdist',
+                          'python_version': 'source',
+                          'requires_python': '>=3.6',
+                          'size': 5615,
+                          'upload_time': '2021-09-03T09:34:48',
+                          'upload_time_iso_8601': '2021-09-03T09:34:48.246689Z',
+                          'url': <gs_pypi.pypi_db.SourceURI object at 0x...>,
+                          'yanked': False,
+                          'yanked_reason': None}]}}]
+    >>>
+    """
+
+    @staticmethod
+    def pick_version_and_variant(package, pkg_data):
+        """
+        Go through all variants of one parsed package datum and select the variant we want to utilise in the ebuild
+        If you replace the call to process_versions to a call to
+        process_version, it will pick one version amongst all available
+        versions. For this to work process_version picks each version, but
+        passes them in pkg_data as an array containing a single version only.
+
+        """
+        #_logger.info(f'Processing {package}.')
+
+        fromiso = datetime.datetime.fromisoformat
+
+        select = {
+            variant: {
+                'key': None,
+                'info': None,   # selected JSON "info" section
+                'url': None,    # selected JSON "urls" section
+                'pkg_datum': None,
+                'use_wheel': 'wheel' in variant,
+                'aberrations': [],
+            }
+            for variant in ['top', 'top-wheel', 'prod', 'prod-wheel',
+                            'new', 'new-wheel']
+        }
+        # Dirk understands there are 3 variants considered and they can be
+        # either binary and not: 
+        # top: highest version number
+        # prod: highest version number for a production release
+        # new: newest release
+        # FIXME Convert to moved is_prod in PypiVersion
+        select['top']['extract'] = select['top-wheel']['extract'] = (
+            lambda d: PypiVersion.parse_version(d['info']['version']))
+        select['prod']['extract'] = select['prod-wheel']['extract'] = (
+            #lambda d: (is_prod(v := parse_version(d['info']['version'])), v))
+            lambda d: ((v := PypiVersion.parse_version(d['info']['version'])).is_prod(),v)
+            )
+        select['new']['extract'] = select['new-wheel']['extract'] = (
+            lambda d: min(fromiso(entry['upload_time_iso_8601'])
+                          for entry in d['urls']))
+
+        def score_wheel(filename):
+            ret = 0
+            if mo := re.fullmatch(r'.*-([^-]+)-([^-]+)-([^-]+)\.whl',
+                                  filename, re.I):
+                python, abi, platform = mo.groups()
+                python_scores = {
+                    'py3': 200,
+                    r'py2\.py3': 200,
+                    'cp311': 102,
+                    'cp310': 101,
+                    'cp3': 100,
+                }
+                for pattern, bounty in python_scores.items():
+                    if re.match(pattern, python):
+                        ret += bounty
+                        break
+                abi_scores = {
+                    'none': 300,
+                    'py3': 200,
+                    r'py2\.py3': 200,
+                    'cp312': 103,
+                    'cp311': 102,
+                    'cp310': 101,
+                    'cp3': 100,
+                }
+                for pattern, bounty in abi_scores.items():
+                    if re.match(pattern, abi):
+                        ret += bounty
+                        break
+                platform_scores = {
+                    'any': 300,
+                    'linux_(x86_64|amd64)': 200,
+                    'manylinux.*(x86_64|amd64)': 100,
+                }
+                for pattern, bounty in platform_scores.items():
+                    if re.match(pattern, platform):
+                        ret += bounty
+                        break
+            else:
+                _logger.warn(f'Improper wheel file name {filename}')
+            return ret
+
+        # Go through each version
+        for datum in reversed(pkg_data.values()):
+            # Check once each variant
+            for variant in select.values():
+                if not datum['urls']:
+                    # If we can't download anything, it's useless.
+                    continue
+                key = variant['extract'](datum)
+                if variant['key'] is not None and variant['key'] >= key:
+                    # If the currently considered variant has already something
+                    # better, continue
+                    continue
+                wheel_score = 0
+                # Go through the different package formats and select one
+                for entry in datum['urls']:
+                    if variant['use_wheel']:
+                        if entry['packagetype'] == 'bdist_wheel':
+                            # pick the best binary package option
+                            score = score_wheel(entry['filename'])
+                            if score > wheel_score:
+                                wheel_score = score
+                                variant.update({
+                                    'key': key,
+                                    'version': datum['info']['version'],
+                                    'info': datum['info'],
+                                    'url': entry,
+                                    #'src_uri': SourceURI(uri=entry['url'],size=entry['size'],hashes=entry["digests"]),
+                                })
+                    else:
+                        if entry['packagetype'] == 'sdist':
+                            variant.update({
+                                'key': key,
+                                'version': datum['info']['version'],
+                                'info': datum['info'],
+                                'url': entry,
+                                #'src_uri': SourceURI(uri=entry['url'],size=entry['size'],hashes=entry["digests"]),
+                            })
+                            break
+
+        def ref(variant):
+            if variant not in select:
+                return None
+            return select[variant]['version']
+
+        for variant in list(select):
+            if select[variant]['key'] is None:
+                # If we're here, the variant has not been considered.
+                # Delete it.
+                del select[variant]
+        for variant in ['top', 'prod', 'new']:
+            if variant not in select or f'{variant}-wheel' not in select:
+                continue
+            if select[variant]['key'] < select[f'{variant}-wheel']['key']:
+                select[variant]['aberrations'].append(
+                    f"{variant}-max {select[f'{variant}-wheel']['key']}")
+            else:
+                del select[f'{variant}-wheel']
+        # Delete duplicately selected variants
+        for suffix in ['', '-wheel']:
+            if ref(f'top{suffix}') == ref(f'prod{suffix}') is not None:
+                del select[f'prod{suffix}']
+            if ref(f'top{suffix}') == ref(f'new{suffix}') is not None:
+                del select[f'new{suffix}']
+            if ref(f'prod{suffix}') == ref(f'new{suffix}') is not None:
+                del select[f'new{suffix}']
+        if len(allref := list(map(ref, select))) > len(set(allref)):
+            _logger.warn(f'Redundant variants selected: {allref}'
+                         f' by {list(select)}')
+
+        if not select:
+            _logger.warn(f'No valid releases for {package} -- dropping.')
+
+        # If we're here we're having selected up 1-3 variants:
+        # * the most recent stable package
+        # * the most recent package
+        # * the newest package
+        # Create a package for each the selected variants
+#        variants=[]
+#        for variant in select.values():
+#            variants.append(variant)
+#            self.create_package(
+#                package, variant['pkg_datum'],
+#                variant['src_uri'], variant['use_wheel'],
+#                variant['aberrations'])
+        return select.values()
+
+    def filter(self,package,json):
+        """
+        Run original filter from houseofsuns branch of gs-pypi
+
+        FIXME Finish the implementation
+        """
+        #l=["dev-python/%s-%s" % (self.parent.package,version) for version in l]
+        #return l.sort(key=portage.versions.cpv_sort_key())
+        variants = self.pick_version_and_variant(package,json)
+        json = []
+        for variant in variants:
+            # Reconstruct JSON block for selected version and variant
+            json.append({
+                variant["version"]: {
+                    'info': variant['info'],
+                    'urls': [variant['url']],
+                    }
+                })
+        return json
+class PypiFilterChain(PypiFilterBase):
+    
+    FILTERS = {
+        "pkg": {
+            "pkg-not-exist":    None,
+            "count":            None,
+            },
+        "ver": {
+            "ver-not-exist":    PypiFilterVersionNotExist,
+            "houseofsuns":      PypiFilterVersionHouseOfSuns,
+            "production-only":  None,
+            "not-production":   None,
+            "newest":           None,
+            "best":             PypiFilterVersionBest
+            "count":            None,
+            },
+        }
+
+    def __init__(self,selector,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.selector = selector
+        self.filters = []
+
+    def append(self,filtr):
+        self.filters.append(filtr)
+
+    def build_chain(self,filter_spec = None):
+        # FIXME
+        if filter_spec is None:
+            filter_spec = config["filter_%s" % self.selector]
+        filters = filter_spec.split(",")
+        for filter in filters:
+            filter_spec_components = filter_spec.split(':')
+            if len(filter_spec_components) == 1:
+                filter_spec_components.append(None)
+            self.append(
+                PyPIjsonDataIteratorVersions.FILTERS[self.selector][filter_spec_components[0]],
+                filter_spec_components[1]
+                )
+
+    def filter(self,package,json):
+        for filtr in self.filters:
+            json = filtr.filter(package,json)
+        return json
+
 class PyPIjsonDataIteratorVersions(object):
     """
     Iterator effectively parsing through one PyPI JSON file
-
-    >>> import gs_pypi.pypi_db,pprint
-    >>> i=gs_pypi.pypi_db.PyPIjsonDataIteratorVersions("transform3d",open("tests/transform3d.json"))
-     * Processing transform3d.
-     * Creating 0.0.0.
-     * Processing transform3d.
-     * Creating 0.0.1.
-     * Processing transform3d.
-     * Creating 0.0.2.
-     * Processing transform3d.
-     * Creating 0.0.3.
-     * Processing transform3d.
-     * Creating 0.0.4.
     """
-
+    
     def __init__(self,name,f):
         """
         Constructor
@@ -577,16 +899,39 @@ class PyPIjsonDataIteratorVersions(object):
         """
         self.pypi2gentoo = {}
         self.gentoo2pypi = {}
-        self.json = json.load(f)
         self.name = name
-        for ver_pypi in self.json:
-            ver_gentoo = PypiVersion.parse_version(ver_pypi)
-            if ver_gentoo is None: continue # ignore unresolvable versions
-            self.pypi2gentoo[ver_pypi] = ver_gentoo    # Keep the Version() object
-            self.gentoo2pypi[str(ver_gentoo)] = ver_pypi
+        self.fltr = PypiFilterChain("ver",self)    # FIXME
+        self.json = None
+
+    def _loadJSON(self):
+        # Load JSON
+        if self.json is None:
+            self.json = json.load(f)
+            # Preprocess JSON - mainly determining Gentoo version number
+            for ver_pypi in self.json:
+                ver_gentoo = PypiVersion.parse_version(ver_pypi)
+                if ver_gentoo is None: 
+                    _logger.warn(f"Version {ver_pypi} is not parseable")
+                    continue # ignore unresolvable versions
+                # Insert Gentoo resolved package name and version into JSON for future reference
+                self.json[ver_pypi]["info"]["gentoo"] = {
+                    "package": self.name,
+                    "version": ver_gentoo,
+                    }
+            # Run filters on JSON
+            self.json = self.fltr.filter(self.name,self.json)
+            # Postprocess JSON - mainly filling our lookup tables and translating to SourceURI
+            for ver_pypi in self.json:
+                #self.pypi2gentoo[ver_pypi] = ver_gentoo    # Keep the Version() object
+                self.gentoo2pypi[str(ver_gentoo)] = ver_pypi
+                for variant in self.json[ver_pypi]["urls"]:
+                    # Replace the 'url' attribute in 'urls' with a SourceURI object
+                    variant['url'] = SourceURI(uri=variant['url'],size=variant['size'],hashes=variant["digests"]),
+        return self.json
 
     def __iter__(self):
         # FIXME Exactly here is where you pick and order versions
+        self._loadJSON()
         self.iter = self.gentoo2pypi.keys()
         return self
 
@@ -604,17 +949,37 @@ class PyPIjsonDataIteratorVersions(object):
         """
         ver_pypi = self.gentoo2pypi[ver_gentoo]
 
-    def __get__(self,ver_gentoo):
+    def __getitem__(self,ver_gentoo):
         """
         Accessing an attribute instantiates ebuild_data object
+
+        >>> import gs_pypi.pypi_db,pprint
+        >>> i=gs_pypi.pypi_db.PyPIjsonDataIteratorVersions("transform3d",open("tests/transform3d.json"))
+        >>> i['0.0.4']          # doctest: +ELLIPSIS
+        <gs_pypi.pypi_db.PyPIjsonDataIteratorEbuildData object at 0x...>
+        >>>
         """
+        self._loadJSON()
         ver_pypi = self.gentoo2pypi[ver_gentoo]
-        return PyPIjsonDataIteratorEbuildData(name,self.pypi2gentoo[ver_pypi],self.json[ver_pypi])
+        return PyPIjsonDataIteratorEbuildData(
+            self.json[ver_pypi]["info"]["gentoo"]["package"],
+            self.json[ver_pypi]["info"]["gentoo"]["version"],
+            self.json[ver_pypi]
+            )
 
     def items(self):
+        """
+        Be compatible with dict interface :)
+
+        >>> import gs_pypi.pypi_db,pprint
+        >>> i=gs_pypi.pypi_db.PyPIjsonDataIteratorVersions("transform3d",open("tests/transform3d.json"))
+        >>> i.items()           # doctest: +ELLIPSIS
+        [('0.0.0', <gs_pypi.pypi_db.PyPIjsonDataIteratorEbuildData object at 0x...>), ('0.0.1', <gs_pypi.pypi_db.PyPIjsonDataIteratorEbuildData object at 0x...>), ('0.0.2', <gs_pypi.pypi_db.PyPIjsonDataIteratorEbuildData object at 0x...>), ('0.0.3', <gs_pypi.pypi_db.PyPIjsonDataIteratorEbuildData object at 0x...>), ('0.0.4', <gs_pypi.pypi_db.PyPIjsonDataIteratorEbuildData object at 0x...>)]
+        >>> 
+        """
         i=[]
-        for ver_gentoo in iter(self):
-            i.append(ver_gentoo,self[ver_gentoo])
+        for ver_gentoo in self.gentoo2pypi:
+            i.append((ver_gentoo,self[ver_gentoo]))
         return i
 
 class PyPIjsonDataIteratorEbuildData(object):
@@ -626,17 +991,7 @@ class PyPIjsonDataIteratorEbuildData(object):
 
     >>> import gs_pypi.pypi_db,pprint
     >>> i=gs_pypi.pypi_db.PyPIjsonDataIteratorVersions("transform3d",open("tests/transform3d.json"))
-     * Processing transform3d.
-     * Creating 0.0.0.
-     * Processing transform3d.
-     * Creating 0.0.1.
-     * Processing transform3d.
-     * Creating 0.0.2.
-     * Processing transform3d.
-     * Creating 0.0.3.
-     * Processing transform3d.
-     * Creating 0.0.4.
-    >>> for ver,ebuild_data in iter(i.items()):
+    >>> for ver,ebuild_data in i.items():
     ...     print (ver)
     ...     ebuild_data=dict(ebuild_data)
     ...     pprint.pprint(ebuild_data.keys())
@@ -648,6 +1003,7 @@ class PyPIjsonDataIteratorEbuildData(object):
     """
 
     def __init__(self,package,version,data):
+        self.package = package
         self.version = version                  # g_collections.Version
         self.json_data = data
         self.ebuild_data = None
@@ -662,9 +1018,11 @@ class PyPIjsonDataIteratorEbuildData(object):
         Process the package data and create the ebuild
 
         Only called when ebuild is accessed
-        """
+
+        FIXME We should pass both PyPI and Gentoo versions to the pipeline, but
+              that ain't happening.  """
         if self.ebuild_data == None:
-            self.pipeline.process_version(package, {version: data})
+            self.pipeline.process_version(self.package, {self.version: self.json_data})
         return self.ebuild_data
 
     def in_category(self, category, name):
@@ -714,11 +1072,12 @@ class PypiDBGenerator(DBGenerator):
     wanted = ()
     substitutions = {}
     nonice = ()
+    portage_dbapi = None
+
     def __call__(self,*args,**kwargs):
         """
         Create package database and place our dynamic hooks in it
         """
-        _logger.info("Opening ")
         self.package_db_class=PyPIjsonDataPackageDB
         pkg_db = super().__call__(*args,**kwargs)
         return(pkg_db)
@@ -746,6 +1105,12 @@ class PypiDBGenerator(DBGenerator):
         reader = PyPIjsonDataFromZip(self.pkg_db.persistent_datadir + "/main.zip")
         pipeline = PyPIjsonDataToPipeline(reader,pkg_db)
 
+    @classmethod
+    def _getmaintree(cls):
+
+        if cls.portage_dbapi is None:
+            cls.portage_dbapi = portage.dbapi.porttree.portdbapi()
+
     def _lookupmaintree(self):
         """
         Look up main tree by accessing Gentoo git repository via web
@@ -760,8 +1125,8 @@ class PypiDBGenerator(DBGenerator):
         >>> t=portage.dbapi.porttree.portdbapi()
         >>> l=t.cp_all(categories=["dev-python"])
         >>> for cp in l:
-        >>>     cpv=t.cp_list(cp)
-        >>> 
+        ...     cpv=t.cp_list(cp)
+        ... 
 
         """
         # FIXME This includes now all packages from all configured trees (i.e.
@@ -769,7 +1134,7 @@ class PypiDBGenerator(DBGenerator):
         #       which repositories parent packages should come
         ret = set()
         _logger.info("Reading Gentoo portage tree")
-        self.portage_dbapi = portage.dbapi.porttree.portdbapi()
+        self._getmaintree()
         for cp in self.portage_dbapi.cp_all(["dev-python"]):
             ret.add(cp.split('/')[1])
         return ret
@@ -999,6 +1364,8 @@ class PypiVersion(Version):
         '0.5.9999.1'
         >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('0.5.dev1+gd00980f.d20231217'))
         '0.5.9999.1'
+        >>> str(gs_pypi.pypi_db.PypiVersion.parse_version('0.0.1.a544.g27dd19d'))
+        'None'
         """
         m=cls.pypi_version_regex.fullmatch(pypi_version)
         if m is None:
@@ -1368,148 +1735,6 @@ class PyPIpeline(object):
         return versions
 
     #@containment
-    def process_version(self, package, pkg_data):
-        """
-        Go through all variants of one parsed package datum and select the variant we want to utilise in the ebuild
-        If you replace the call to process_versions to a call to
-        process_version, it will pick one version amongst all available
-        versions. For this to work process_version picks each version, but
-        passes them in pkg_data as an array containing a single version only.
-
-        """
-        _logger.info(f'Processing {package}.')
-
-        fromiso = datetime.datetime.fromisoformat
-
-        select = {
-            variant: {
-                'key': None,
-                'pkg_datum': None,
-                'src_uri': None,
-                'use_wheel': 'wheel' in variant,
-                'aberrations': [],
-            }
-            for variant in ['top', 'top-wheel', 'prod', 'prod-wheel',
-                            'new', 'new-wheel']
-        }
-        select['top']['extract'] = select['top-wheel']['extract'] = (
-            lambda d: parse_version(d['info']['version']))
-        select['prod']['extract'] = select['prod-wheel']['extract'] = (
-            lambda d: (is_prod(v := parse_version(d['info']['version'])), v))
-        select['new']['extract'] = select['new-wheel']['extract'] = (
-            lambda d: min(fromiso(entry['upload_time_iso_8601'])
-                          for entry in d['urls']))
-
-        def score_wheel(filename):
-            ret = 0
-            if mo := re.fullmatch(r'.*-([^-]+)-([^-]+)-([^-]+)\.whl',
-                                  filename, re.I):
-                python, abi, platform = mo.groups()
-                python_scores = {
-                    'py3': 200,
-                    r'py2\.py3': 200,
-                    'cp311': 102,
-                    'cp310': 101,
-                    'cp3': 100,
-                }
-                for pattern, bounty in python_scores.items():
-                    if re.match(pattern, python):
-                        ret += bounty
-                        break
-                abi_scores = {
-                    'none': 300,
-                    'py3': 200,
-                    r'py2\.py3': 200,
-                    'cp312': 103,
-                    'cp311': 102,
-                    'cp310': 101,
-                    'cp3': 100,
-                }
-                for pattern, bounty in abi_scores.items():
-                    if re.match(pattern, abi):
-                        ret += bounty
-                        break
-                platform_scores = {
-                    'any': 300,
-                    'linux_(x86_64|amd64)': 200,
-                    'manylinux.*(x86_64|amd64)': 100,
-                }
-                for pattern, bounty in platform_scores.items():
-                    if re.match(pattern, platform):
-                        ret += bounty
-                        break
-            else:
-                _logger.warn(f'Improper wheel file name {filename}')
-            return ret
-
-        for datum in reversed(pkg_data.values()):
-            for variant in select.values():
-                if not datum['urls']:
-                    continue
-                key = variant['extract'](datum)
-                if variant['key'] is not None and variant['key'] >= key:
-                    continue
-                wheel_score = 0
-                for entry in datum['urls']:
-                    if variant['use_wheel']:
-                        if entry['packagetype'] == 'bdist_wheel':
-                            score = score_wheel(entry['filename'])
-                            if score > wheel_score:
-                                wheel_score = score
-                                variant.update({
-                                    'key': key,
-                                    'pkg_datum': datum,
-                                    'src_uri': SourceURI(uri=entry['url'],size=entry['size'],hashes=entry["digests"]),
-                                })
-                    else:
-                        if entry['packagetype'] == 'sdist':
-                            variant.update({
-                                'key': key,
-                                'pkg_datum': datum,
-                                'src_uri': SourceURI(uri=entry['url'],size=entry['size'],hashes=entry["digests"]),
-                            })
-                            break
-
-        def ref(variant):
-            if variant not in select:
-                return None
-            return select[variant]['pkg_datum']['info']['version']
-
-        for variant in list(select):
-            if select[variant]['key'] is None:
-                del select[variant]
-        for variant in ['top', 'prod', 'new']:
-            if variant not in select or f'{variant}-wheel' not in select:
-                continue
-            if select[variant]['key'] < select[f'{variant}-wheel']['key']:
-                select[variant]['aberrations'].append(
-                    f"{variant}-max {select[f'{variant}-wheel']['key']}")
-            else:
-                del select[f'{variant}-wheel']
-        for suffix in ['', '-wheel']:
-            if ref(f'top{suffix}') == ref(f'prod{suffix}') is not None:
-                del select[f'prod{suffix}']
-            if ref(f'top{suffix}') == ref(f'new{suffix}') is not None:
-                del select[f'new{suffix}']
-            if ref(f'prod{suffix}') == ref(f'new{suffix}') is not None:
-                del select[f'new{suffix}']
-        if len(allref := list(map(ref, select))) > len(set(allref)):
-            _logger.warn(f'Redundant variants selected: {allref}'
-                         f' by {list(select)}')
-
-        if not select:
-            _logger.warn(f'No valid releases for {package} -- dropping.')
-
-        # Create a package for the selected variants
-        variants=[]
-        for variant in select.values():
-            variants.append(variant)
-            self.create_package(
-                package, variant['pkg_datum'],
-                variant['src_uri'], variant['use_wheel'],
-                variant['aberrations'])
-        return variants
-
     def get_ebuild_data(self, package, pkg_datum,
                        src_uri, use_wheel, aberrations):
         """

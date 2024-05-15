@@ -193,4 +193,4 @@ class TestPackageNamingStandardAdherence(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 
-# vim:expandtab:fileencoding-utf-8
+# vim:expandtab:fileencoding:utf-8
